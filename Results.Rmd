@@ -51,6 +51,7 @@ library(stargazer)
 library(texreg)
 library(kableExtra)
 library(pander)
+library(beeswarm)
 conflict_prefer("select","dplyr")
 conflict_prefer("extract", "texreg")
 conflict_prefer("filter", "dplyr")
@@ -67,114 +68,28 @@ conflict_prefer("select", "dplyr")
 
 
 ```{r datasets, include = FALSE}
-allcomp <- read_excel(here("final_df_2022logs2.xlsx"))
-LA_list_missing <-as.list(unique(allcomp$fips[which(is.na(allcomp$diff_uer))]))
-# Remove LA counties with missing observations
-allcomp <- subset(allcomp, !(fips %in% LA_list_missing))
-allcomp$REE_bin <- ifelse(allcomp$REE_inv_scaled_realgdp > 0, 1, 0) # 162 mines_diff != 0
-allcomp$REE_bin_top90 <- ifelse(allcomp$REE_inv_scaled_realgdp >= 0.001, 1, 0) # 152 mines_diff != 0 # 438 obs 152 mines_diff != 0 in coal subset
-allcomp$REE_bin_top75 <- ifelse(allcomp$REE_inv_scaled_realgdp >= 0.005, 1, 0) # 123 mines_diff != 0
-allcomp$REE_bin_top50 <- ifelse(allcomp$REE_inv_scaled_realgdp >= 0.0221, 1, 0) # 71 mines_diff != 0
-allcomp$REE_bin_top25 <- ifelse(allcomp$REE_inv_scaled_realgdp >= 0.0982, 1, 0) # 29 mines_diff != 0
+# Dataset of relevant variables for analysis
+allcomp <- read_excel(here("data/allcomp_final.xlsx"))
 
-allcomp$neg_diffuer <- - allcomp$diff_uer
+# Unmodified lookup table to adjust FIPS codes between various standards
+bea_fips_mods <- read_excel(here("data/FIPSModificationsVA.xlsx"), skip = 1, col_types = c("text", "text","text","text"))
 
-bea_fips_mods <- read_excel(here("FIPSModificationsVA.xlsx"), skip = 1, col_types = c("text", "text","text","text"))
-
+# Create subset of coal counties (CC) only (with active mines at some point)
 cclist <- unique(allcomp$fips[which(allcomp$active_mines != 0)])
 allcomp_cc <- subset(allcomp, fips %in% cclist)
 
-cc_cluster <- read_excel(here("cc_clusters_251.xlsx"))
-
+# Dataset including the "type" of county as found in the Typology work (Typology Work_New.Rmd)
+# Merged with CC dataset
+cc_cluster <- read_excel(here("data/cc_clusters_251.xlsx"))
 allcomp_cc_types <- merge(allcomp_cc, cc_cluster, by = "fips", all.x = TRUE)
 
-##############################################################
-## Function to identify FIPS code
+# Load required functions
+source("useful_functions.R")
+source("dicts.R")
 
-fips_format <- function(fipscode){
-  if (is.na(fipscode)) return("00000")
-  fips_c = as.character(fipscode)
-  test_chars = nchar(fips_c)
-  if (is.null(fipscode) | is.na(fipscode)) {
-    return (nchar(trunc(fipscode)))
-  }
-  else if (test_chars < 4) {
-    return (fips_c)
-  }
-  else if (test_chars < 5) {
-    return (paste0(0, fips_c, sep = ""))
-  }
-  else {
-    return (fips_c)
-  }
-}
 ```
 
 ```{r variable labels, include = FALSE}
-#### Variable labels for latex output ####
-
-setFixest_dict(c(emp = "Persons Employed in Coal", employed = "Employed Persons",
-                 uer = "Unemployment Rate", active_mines = "Active Mines", 
-                 p_inc_1000 = "County Personal Income (PI) in USD Millions", 
-                 p_inc_X = "County Personal Income (PI) in USD Billions",
-                 pop_1000 = "County Population (Thousands)", 
-                 fips = "County FIPS Code", year = "Year",
-                 lag_mines = "Active Mines (t-1)",  lag_mines2 = "Active Mines (t-2)",
-                 lag_mines3 = "Active Mines (t-3)",lag_mines4 = "Active Mines (t-4)",
-                 mines_diff = "Change Active Mines", lag_diff = "Change Active Mines (t-1)",
-                 lag_diff2 = "Change Active Mines (t-2)", lag_diff3 = "Change Active Mines (t-3)",
-                 diff_emp = "Change Persons Employed in Coal",
-                 lag_diff_emp = "Change Persons Employed in Coal (t-1)",
-                 lag_diff_emp2 = "Change Persons Employed in Coal (t-2)",
-                 diff_employed = "Change Employed Persons", 
-                 diff_uer = "Change Unemployment Rate",
-                 green_emp = "Persons Employed in Green Sectors",
-                 diff_green_emp = "Change Persons Employed in Green Sectors",
-                 lag_emp = "Persons Employed in Coal (t-1)",
-                 lag_emp2 = "Persons Employed in Coal (t-2)",
-                 ff_emp = "Persons Employed in FF (not incl. Coal)",
-                 diff_ff_emp = "Change Persons Employed in FF (not incl. Coal)",
-                 lag_diff_ffemp = "Change Persons Employed in FF (not incl. Coal) (t-1)",
-                 lag_diff_ffemp2 = "Change Persons Employed in FF (not incl. Coal) (t-2)",
-                 diff_total_ff_emp = "Change Persons Employed in FF (incl. Coal)",
-                 lag_diff_total_ffemp = "Change Persons Employed in FF (incl. Coal) (t-1)",
-                 lag_diff_total_ffemp2 = "Change Persons Employed in FF (incl. Coal) (t-2)",
-                 type_factor1 = "Type 1",  type_factor2 = "Type 2", type_factor3 = "Type 3",
-                 mine_closure = "Mine Closed (t)", lag_closure = "Mine Closed (t-1)",
-                 ruc_bin = "Rural",
-                 REE_inv_scaled_pinc = "REE Investments (Proportion of County PI)",
-                 logrealgdp_pc = "Real GDP per capita (log)",
-                 diff_log_realgdp_pc = "Change in (log) Real GDP pc",
-                 log_pop = "Population (log)",
-                 log_realgdp = "Real GDP (log)",
-                 diff_log_employed = "Change in Employed Persons (log)",
-                 diff_log_unemployed = "Change in Unemployed Persons (log)",
-                 diff_log_pop = "Change in Population (log)",
-                 diff_log_lf = "Change in Labour Force (log)",
-                 diff_log_realgdp = "Change in Real GDP (log)",
-                 prod_diff = "Change in Production (short tons)",
-                 lag_prod_diff = "Change in Production (short tons) (t-1)",
-                 lag_prod_diff2 = "Change in Production (short tons) (t-2)"
-))
-
-sum_dict <- c("Active Mines (no.)","Unemployment Rate","Employed Persons", 
-              "Unemployed Persons", "Labour Force", "Population", 
-              "Total USDA RE Investments in USD","Coal Production (in short tons)",
-              "Real GDP","Real GDP Per Capita", "Rural-Urban Code", 
-              "Rural-Urban (binary)","Total TAA Allocation in USD",
-              "USDA RE Investments scaled by Real GDP")
-
-sum_dict_trans <-  c("Δ Unemployment Rate", "Δ Active Mines","Δ (log) Real GDP", 
-                      "Δ (log) Real GDP per capita", "Δ (log) Employed Persons",
-                      "Δ (log) Unemployed Persons", "Δ (log) Labour Force", "Δ (log) Population", 
-                      "REE ≥ .1% of GDP")
-
-cm <- c('lag_diff2' = 'Δ Active Mines (t-2)',
-        'lag_diff' = 'Δ Active Mines (t-1)', 
-        'mines_diff' = 'Δ Active Mines')
-
-plot_dict = c("f(mines_diff,3)" = "-3", "f(mines_diff,2)" = "-2", "f(mines_diff, 1)" = "-1", 
-              "mines_diff" = "0", "lag_diff" = "+1", "lag_diff2" = "+2", "lag_diff3" = "+3")
  
 ```
 
@@ -264,7 +179,7 @@ pander(rel_tot)
 ##############################################################
 # Import adjacency matrix from US Census Bureau: 
 # https://www.census.gov/programs-surveys/geography/library/reference/county-adjacency-file.html
-xmat1 <- read.csv("county_adjacency.txt", sep="\t", stringsAsFactors = FALSE, header = FALSE)
+xmat1 <- read.csv("data/county_adjacency.txt", sep="\t", stringsAsFactors = FALSE, header = FALSE)
 
 # Retain only columns with FIPS codes of each county (V2) and its neighbors (V4)
 xmat1 <- xmat1[,c("V2","V4")]
@@ -506,10 +421,6 @@ es_3negccpos <- feols(diff_uer ~ l(mines_diff, -3:0) + lag_diff + lag_diff2 + la
 
 etable(es3pos, es_2negpos, es_3negpos, es3_ccpos, es_2negccpos, es_3negccpos, 
        order = c("mines_diff,3", "mines_diff,2", "mines_diff,1", "Active Mines", "lag_diff3"))
-                 
-              
-
-
 
 ```
 ### Change in active mines interacted with rural (1) vs. urban (0)
@@ -742,25 +653,6 @@ cc_urbanpdmif = feols(FE_diffuer, urban_pdmif, se = "twoway")
 etable(cc_rural, cc_ruralpdmif, cc_medium, cc_mediumpdmif, cc_urban, cc_urbanpdmif)
 ```
 
-
-```{r beeswarm, eval = FALSE, include = FALSE}
-# summary(pdmif)
-library(beeswarm)
-# # print(pdmif$GroupFactors)
-# # print(pdmif$GroupLoadings)
-# pdmif$GroupLoadings
-# pdmif$GroupFactors
-# as.data.frame()
-# rownames(as.data.frame(pdmif$Coefficients) %>%  View() ) = fps
-# 
-# beeswarm(c(pdmif$Coefficients[1,],pdmif$Coefficients[2,],pdmif$Coefficients[3,]) ~ c(rep(1,236),rep(2,236), rep(3,236)),
-#           col = c(rgb(0.25, 0.63, 1, 0.75), rgb(1, 0.88, 0.6, 0.75), rgb(0.97, 0.43, 0.37, 0.75)),
-#          #pwcol = groupmem,
-#            pch=19, method="swarm", cex=0.5, corral="wrap", ylab="Value", xlab=NA, labels=c("mines_diff","lag_diff","lag_diff2"))
-
-
-```
-
 ### Binary change in mines
 Likely to exclude this estimation as results are not significant.
 ```{r}
@@ -841,24 +733,13 @@ var_rows <-  c("Dependent Var.:", "Change Active Mines","Change Active Mines (t-
 # econ_df
 # test <- as.matrix(pvalue(model_emp)[1:3])
 
-create_cols <- function(model){
-  pval <- model %>% pvalue() %>% 
-    lapply(., function(z) ifelse(z <= 0.001, 4,
-                                           ifelse(z > 0.001 & z <= 0.01, 3, 
-                                                  ifelse(z > 0.01 & z <= 0.05, 2, 
-                                                         ifelse(z > 0.05 & z <= 0.1, 1,0)))))
-  pval <- as.matrix(as.numeric(pval[1:3]))
-  iden <- matrix(nrow = 3, ncol = 3, data = 0)
-  diag(iden) <- unlist(lapply(coef(model)[1:3], sign))
-  return(-1*(t(pval) %*% iden))
-}
 econ_df <- as.data.frame(rbind(create_cols(model_uer), create_cols(model_emp), create_cols(model_unemp), create_cols(model_lf), create_cols(model_pop)))
 colnames(econ_df) <- c("t", "t-1", "t-2")
 econ_df$model <- c("UER", "EMP", "UNEMP", "LF", "POP")
 econ_dflong <- pivot_longer(econ_df, !model, names_to = "time", values_to = "fill")
 #econ_dflong$fill <- as.factor(econ_dflong$fill)
 econ_dflong$fill[which(econ_dflong$fill == 0)] <- NA
-# writexl::write_xlsx(econ_dflong, here("fulleconomydf.xlsx"))
+# writexl::write_xlsx(econ_dflong, here("data/"fulleconomydf.xlsx"))
 ggplot(econ_dflong, aes(x = time, y = model, fill = fill))+
   scale_y_discrete(limits = rev(c("UER", "EMP", "UNEMP", "LF", "POP")), labels = rev(c("\u0394 UER","\u0394 (log) Employed persons", "\u0394 (log) Unemployed persons", "\u0394 (log) Labour force", "\u0394 (log) Population")))+
   scale_x_discrete(limits = c("t", "t-1", "t-2"), labels = c("0","+1", "+2"))+
@@ -1151,36 +1032,7 @@ names(tab1) = c("", gsub(".*_(.*)", "\\1", names(tab1)[-1]))
 ```
 
 ```{r, eval = FALSE, include = FALSE}
-# AIC and BIC function for splm object #
-AICsplm = function(object, k=2, criterion=c("AIC", "BIC")){
- sp = summary(object)
- l = sp$logLik
- np = length(coef(sp))
- N = nrow(sp$model)
- if (sp$effects=="sptpfe") {
- n = length(sp$res.eff[[1]]$res.sfe)
- T = length(sp$res.eff[[1]]$res.tfe)
- np = np+n+T
- }
- if (sp$effects=="spfe") {
- n = length(sp$res.eff[[1]]$res.sfe)
- np = np+n+1
- }
- if (sp$effects=="tpfe") {
- T = length(sp$res.eff[[1]]$res.tfe)
- np = np+T+1
- }
- if(criterion=="AIC"){
- aic = -2*l+k*np
- names(aic) = "AIC"
- return(aic)
- }
- if(criterion=="BIC"){
- bic = -2*l+log(N)*np
- names(bic) = "BIC"
- return(bic)
- }
-}
+
 sptest = summary(sp_err_mines)
 sptest$effects
 
@@ -1212,31 +1064,7 @@ rownames(aic_bic) <- c("Spatial Lag-Error Model", "Spatial Lag Model", "Spatial 
 ```
 
 ```{r, cache = TRUE}
-dw_compat <- function(sp){
-  spdf <- summary(sp)
-  ti_closure <- data.frame(
-    term = spdf$CoefTable[1:5,0],
-    estimate = spdf$CoefTable[1:5,1],
-    std.error = spdf$CoefTable[1:5,2])
-  ti_closure$model = "Spatial Error"
-  ti_closure$term <- row.names(ti_closure)
-  # df = nrow(spdf$model)
-  # ti_closure$conf.low = ti_closure$estimate -1*ti_closure$std.error*qt(0.975, df-1)
-  # ti_closure$conf.high = ti_closure$estimate +1*ti_closure$std.error*qt(0.975, df-1)
-  return(ti_closure)
-}
 
-dw_compat_imp <- function(imp){
-  impdf <- summary(imp, zstats=TRUE, short=T)
-  ti_closure <- data.frame(
-    term = c("mines_diff", "lag_diff","lag_diff2","diff_log_realgdp_pc"),
-    estimate = impdf$res$direct[1:4],
-    std.error = impdf$semat[,1])
-  #ti_closure$term <- row.names(ti_closure)
-  #ti_closure$conf.low = ti_closure$estimate -1*ti_closure$std.error*qt(0.975, 200)
-  #ti_closure$conf.high = ti_closure$estimate +1*ti_closure$std.error*qt(0.975, 200)
-  return(ti_closure)
-}
 
 sp_err <- dw_compat(sp_err_mines)
 sp_lag <- dw_compat_imp(implag)
@@ -1263,35 +1091,6 @@ emp_spat <- spml(fmdiff_employed, data = allcomp_full, index = NULL,  listw = fm
 impemp_spat <- spatialreg::impacts(emp_spat, tr = trMatc, R = 200)
 summary(impemp_spat, zstats=TRUE, short=TRUE)
 
-
-# Spatial model summary results
-spat_output <- function(spat_model) {
-  sums <- summary(spat_model, zstats=TRUE, short=TRUE)
-  sums$pzmat <- ifelse(sums$pzmat <= 0.001, "***",
-                                           ifelse(sums$pzmat > 0.001 & sums$pzmat <= 0.01, "**", 
-                                                  ifelse(sums$pzmat > 0.01 & sums$pzmat <= 0.05, "*", 
-                                                              ifelse(sums$pzmat > 0.05 & sums$pzmat <= 0.1, ".",""))))
-    sums$res <- sums$res %>% as.data.frame %>% mutate_if(is.numeric, round, 3)
-    sums$semat <- sums$semat %>% as.data.frame %>% mutate_if(is.numeric, round, 3)
-    sumstable <- data.frame(matrix(ncol = 3, nrow = 5))
-    for(l in 1:ncol(sums$pzmat)){
-      c = paste0(as.data.frame(sums$res)[,l],sums$pzmat[,l])
-      if(length(c) == 5){
-        sumstable[,l] <- as.data.frame(c)
-        }else{
-        c = c(c,NA)
-        sumstable[,l] <- as.data.frame(c)
-      }
-    }
-    row.names(sumstable) <- c("mines_diff", "lag_diff", "lag_diff2", "diff_log_realgdp","diff_log_pop")
-    names(sumstable) <- c("Direct", "Indirect", "Total")
-    sumstable$Value_type <- "Estimate"
-    sumstable <- rbind(sumstable, cbind(sums$semat, Value_type = "SE"))
-    
-    orderst <- sumstable[match(c("mines_diff", "mines_diff1", "lag_diff", "lag_diff1", "lag_diff2", "lag_diff21", "diff_log_realgdp", "diff_log_realgdp1","diff_log_pop","diff_log_pop1"), rownames(sumstable)),]
-    
-    return(orderst)
-}
 
 ```
 
@@ -1360,26 +1159,6 @@ glht(main_cc, linfct = "mines_diff + lag_diff + lag_diff2 = 0") %>% summary
 ssr_df <- allcomp %>% slice(main$obs_selection$obsRemoved) %>% mutate(residuals = main$residuals) %>%
   group_by(fips) %>%
   summarise(ssr = sum(residuals^2))
-
-df_va <- function(df){
-  fips_pre <- as.list(unique(df$fips))
-  for(a in 1:length(fips_pre)){
-  f = fips_pre[a]
-  if(f %in% getfips){
-      newfips = names(getfips[which(getfips == f)])
-      if(length(newfips) != 0){
-        for(b in 1:length(newfips)){
-          copy <- subset(df, fips == f)
-          copy$fips <- newfips[b]
-          df <- rbind(df, copy)
-        }
-      }else{
-      }
-      df <- subset(df, fips != f)
-  }
-}
-  return(df)
-}
 
 allcompva <- df_va(allcomp)
 
@@ -1504,8 +1283,6 @@ grid.arrange(uerplot, emp_lfplot, unemp_plot, ncol=2, nrow =2)
 Confirmed!
 ```{r}
 library(phtt)
-# Initialise function for specific size of matrix
-c_mat <- function(var) {matrix(var, 18, 3072)}
 
 # Create matrices of most often used variables
 dep_diff_uer <- c_mat(allcomp$diff_uer)
@@ -1569,15 +1346,6 @@ plot(summary(change2_KSS))
 
 
 ```{r phtt efforts without REE Ind comp}
-dw_compat_kss <- function(kss){
-  kssdf <- summary(kss)
-  ksscompat <- data.frame(
-    term = dimnames(kssdf$coefficients)[[1]][1:3],
-    estimate = kssdf$coefficients[1:3,1],
-    std.error = kssdf$coefficients[1:3,2])
-  ksscompat$model = paste("IFE Model w/",kssdf$KSS.obj$used.dim,"dimensions")
-  return(ksscompat)
-}
 
 KSS_ind1 <- dw_compat_kss(change1_KSS)
 KSS_ind2 <- dw_compat_kss(change2_KSS)
@@ -1610,20 +1378,6 @@ test2 <- summary(change2_KSStw)
 
 # SSR increase after nfactors = 1.
 # To report: 1,2 dimensions
-
-tablefun <- function(obj) {
-  briefdf <- as.data.frame(cbind(obj$coefficients))
-  names(briefdf)[4] <- "p_values"
-  newdf <- briefdf %>%  mutate_at("p_values", function(y) ifelse(y <= 0.001, "***",
-                                           ifelse(y > 0.001 & y <= 0.01, "**",
-                                                  ifelse(y > 0.01 & y <= 0.05, "*",
-                                                         ifelse(y > 0.05 & y <= 0.1, ".",""))))) %>%
-  mutate_if(is.numeric, round, 3) %>%
-  mutate(Estimate = paste0(Estimate, p_values), StdErr = paste0("(",StdErr,")"), var = rownames(.)) %>%
-  select("Estimate","StdErr", "var") %>%
-  pivot_longer(!var, names_to = "measure", values_to = "estimate")
-  return(newdf)
-}
 
 # tabletest <- cbind(tablefun(test1), select(tablefun(test2), c(3)))
 # tabletest
@@ -1772,7 +1526,7 @@ cc <- subset(cc, term != "diff_log_realgdp_pc")
 full_cc <- rbind(subset(cc, term != "diff_log_realgdp_pc"), subset(full, term != "diff_log_realgdp_pc"))
 
 allmodels <- rbind(spat_models, full_cc[c("estimate", "std.error","model","term")], ife_tw_models)
-allmodelssave <- read_excel(here("coefplotdf.xlsx"))
+allmodelssave <- read_excel(here("data/coefplotdf.xlsx"))
 dwplot(allmodelssave, vline = geom_vline(
            xintercept = 0,
            colour = "grey50"
@@ -1857,108 +1611,5 @@ cc_sum <- allcomp_cc %>%
   summarize(REE = sum(REE_inv), TAA = sum(total_taa))
 
 # Avg mines closed per yer
-
-```
-
-
-```{r, eval = FALSE, include = FALSE}
-# Necessary variable definitions
-
-# NEED diff_log_realgdp_pc
-allcomp$TAA_scaled_realgdp <- allcomp$total_taa/allcomp$realgdp
-allcomp$realgdp_pc <- allcomp$realgdp/allcomp$pop
-allcomp$logrealgdp_pc <- log(allcomp$realgdp_pc)
-allcomp$log_realgdp <- log(allcomp$realgdp)
-allcomp$lag_closure[which(is.na(allcomp$lag_closure))] <- 0
-
-allcomp$neg_diff <- ifelse(allcomp$mines_diff < 0, 1, 0)
-allcomp$pos_diff <- ifelse(allcomp$mines_diff >= 0, 1, 0)
-allcomp$log_employed <- log(allcomp$employed)
-
-writexl::write_xlsx(allcomp_logs, here("final_df_2022logs.xlsx"))
-
-gdp <- read_excel("/Users/ebbamark/Library/CloudStorage/OneDrive-Nexus365/Ebba Dissertation Materials/FINAL_REG_DATASETS/gdp_2001_2019.xlsx")
-gdp_01 <- subset(gdp, year == 2001)
-gdp_01 <- select(gdp_01, c(fips, realgdp, currentgdp))
-
-df_01 <- read_excel(here("mp_US.xlsx"))
-df_01 <- subset(df_01, year == 2001)
-df_01 <- select(df_01, c(fips, year, employed, labour_force, pop, unemployed))
-df_gdp_01 <- merge(df_01, gdp_01, by = "fips", all.x = TRUE)
-
-# Broomfield County, Colorado was only created in 2001 so no observation 
-# exists for 2001 - cannot compute change. Will retain as NA.
-df_gdp_01$fips[which(is.na(df_gdp_01$pop))]
-
-
-test <- bind_rows(allcomp, df_gdp_01)
-test <- test %>% arrange(fips, year)
-# test$log_employed <- log(test$employed)
-# test$log_lf <- log(test$labour_force)
-# test$log_pop <- log(test$pop)
-# test$log_unemployed <- log(test$unemployed)
-test$realgdp_pc <- test$realgdp/test$pop
-test$log_realgdp_pc <- log(test$realgdp_pc)
-test$log_realgdp <- log(test$realgdp)
-# all.equal(test$log_realgdp1, test$log_realgdp)
-sum(is.na(test$log_realgdp_pc))
-
-# Diff pop
-# Diff real gdp (current)
-# Diff log real gdp  (current)
-# Diff real gdp pc  (current)
-# MOST IMPORTANT: Diff log real gdp pc  (current)
-
-test1 <- test %>% 
-   arrange(fips, year) %>%
-   group_by(fips) %>% mutate(diff_pop = c(NA, diff(pop)), 
-                             diff_realgdp = c(NA, diff(realgdp)), 
-                             diff_log_realgdp = c(NA, diff(log_realgdp)),
-                             diff_realgdp_pc = c(NA, diff(realgdp_pc)),
-                             diff_log_realgdp_pc = c(NA, diff(log_realgdp_pc)))%>%
-   ungroup
-
-test2 <- dplyr::select(test1, -c('realgdp_pc1', 'log_realgdp1'))
-# test1 <- test %>% 
-#   arrange(fips, year) %>%
-#   group_by(fips) %>% mutate(diff_log_employed = c(NA, diff(log_employed)), 
-#                             diff_log_unemployed = c(NA, diff(log_unemployed)), 
-#                             diff_log_lf = c(NA, diff(log_lf)),
-#                             diff_log_pop = c(NA, diff(log_pop)))%>%
-#   ungroup
-
-# test1 %>% select(fips, year, employed, log_employed, diff_log_employed, unemployed, log_unemployed, diff_log_unemployed,labour_force, log_lf, diff_log_lf, pop, log_pop, diff_log_pop) %>% View()
-
-allcomp_logs <- subset(test2, year != 2001)
-identical(allcomp_logs[,1:(length(allcomp_logs)-5)], allcomp)
-
-writexl::write_xlsx(allcomp_logs, here("final_df_2022logs2.xlsx"))
-
-# df_VA2 <- df_va(df_VA2)
-# df_VA2 = allcomp
-# identical(df_VA2, df_VA)
-# fips_pre <- as.list(unique(allcomp$fips))
-# for(a in 1:length(fips_pre)){
-#   f = fips_pre[a]
-#   if(f %in% getfips){
-#       newfips = names(getfips[which(getfips == f)])
-#       print(newfips)
-#       if(length(newfips) != 0){
-#         print("entered")
-#         for(b in 1:length(newfips)){
-#           print(newfips[b])
-#           copy <- subset(df_VA, fips == f)
-#           copy$fips <- newfips[b]
-#           df_VA <- rbind(df_VA, copy)
-#         }
-#       }else{
-#       }
-#       df_VA <- subset(df_VA, fips != f)
-#       print(nrow(df_VA)/18)
-#   }
-# }
-# identical(df_VA2, df_VA)
-# identical(select(subset(allcomp, fips == "51901"), -fips), select(subset(df_VA2, fips == "51003"), -fips))
-  
 
 ```
