@@ -67,11 +67,7 @@ conflict_prefer("select", "dplyr")
 
 
 ```{r datasets, include = FALSE}
-here::i_am("Final Data Products/final_df_2022full.xlsx")
-#allcomp <- read_excel(here("Final Data Products/final_df_2022full.xlsx"))
-#allcomp <- read_excel(here("Final Data Products/final_df_2022logs.xlsx"))
-#allcomp <- read_excel(here("Final Data Products/final_df_2022_ruccomplete.xlsx"))
-allcomp <- read_excel(here("Final Data Products/final_df_2022logs2.xlsx"))
+allcomp <- read_excel(here("final_df_2022logs2.xlsx"))
 LA_list_missing <-as.list(unique(allcomp$fips[which(is.na(allcomp$diff_uer))]))
 # Remove LA counties with missing observations
 allcomp <- subset(allcomp, !(fips %in% LA_list_missing))
@@ -83,12 +79,12 @@ allcomp$REE_bin_top25 <- ifelse(allcomp$REE_inv_scaled_realgdp >= 0.0982, 1, 0) 
 
 allcomp$neg_diffuer <- - allcomp$diff_uer
 
-bea_fips_mods <- read_excel(here("Final Data Products/FIPSModificationsVA.xlsx"), skip = 1, col_types = c("text", "text","text","text"))
+bea_fips_mods <- read_excel(here("FIPSModificationsVA.xlsx"), skip = 1, col_types = c("text", "text","text","text"))
 
 cclist <- unique(allcomp$fips[which(allcomp$active_mines != 0)])
 allcomp_cc <- subset(allcomp, fips %in% cclist)
 
-cc_cluster <- read_excel(here("Final Data Products/cc_clusters_251.xlsx"))
+cc_cluster <- read_excel(here("cc_clusters_251.xlsx"))
 
 allcomp_cc_types <- merge(allcomp_cc, cc_cluster, by = "fips", all.x = TRUE)
 
@@ -268,7 +264,7 @@ pander(rel_tot)
 ##############################################################
 # Import adjacency matrix from US Census Bureau: 
 # https://www.census.gov/programs-surveys/geography/library/reference/county-adjacency-file.html
-xmat1 <- read.csv("Final Data Products/county_adjacency.txt", sep="\t", stringsAsFactors = FALSE, header = FALSE)
+xmat1 <- read.csv("county_adjacency.txt", sep="\t", stringsAsFactors = FALSE, header = FALSE)
 
 # Retain only columns with FIPS codes of each county (V2) and its neighbors (V4)
 xmat1 <- xmat1[,c("V2","V4")]
@@ -862,7 +858,7 @@ econ_df$model <- c("UER", "EMP", "UNEMP", "LF", "POP")
 econ_dflong <- pivot_longer(econ_df, !model, names_to = "time", values_to = "fill")
 #econ_dflong$fill <- as.factor(econ_dflong$fill)
 econ_dflong$fill[which(econ_dflong$fill == 0)] <- NA
-writexl::write_xlsx(econ_dflong, here("fulleconomydf.xlsx"))
+# writexl::write_xlsx(econ_dflong, here("fulleconomydf.xlsx"))
 ggplot(econ_dflong, aes(x = time, y = model, fill = fill))+
   scale_y_discrete(limits = rev(c("UER", "EMP", "UNEMP", "LF", "POP")), labels = rev(c("\u0394 UER","\u0394 (log) Employed persons", "\u0394 (log) Unemployed persons", "\u0394 (log) Labour force", "\u0394 (log) Population")))+
   scale_x_discrete(limits = c("t", "t-1", "t-2"), labels = c("0","+1", "+2"))+
@@ -1776,7 +1772,6 @@ cc <- subset(cc, term != "diff_log_realgdp_pc")
 full_cc <- rbind(subset(cc, term != "diff_log_realgdp_pc"), subset(full, term != "diff_log_realgdp_pc"))
 
 allmodels <- rbind(spat_models, full_cc[c("estimate", "std.error","model","term")], ife_tw_models)
-writexl::write_xlsx(allmodels, here("coefplotdf.xlsx"))
 allmodelssave <- read_excel(here("coefplotdf.xlsx"))
 dwplot(allmodelssave, vline = geom_vline(
            xintercept = 0,
@@ -1880,13 +1875,13 @@ allcomp$neg_diff <- ifelse(allcomp$mines_diff < 0, 1, 0)
 allcomp$pos_diff <- ifelse(allcomp$mines_diff >= 0, 1, 0)
 allcomp$log_employed <- log(allcomp$employed)
 
-writexl::write_xlsx(allcomp_logs, here("Final Data Products/final_df_2022logs.xlsx"))
+writexl::write_xlsx(allcomp_logs, here("final_df_2022logs.xlsx"))
 
 gdp <- read_excel("/Users/ebbamark/Library/CloudStorage/OneDrive-Nexus365/Ebba Dissertation Materials/FINAL_REG_DATASETS/gdp_2001_2019.xlsx")
 gdp_01 <- subset(gdp, year == 2001)
 gdp_01 <- select(gdp_01, c(fips, realgdp, currentgdp))
 
-df_01 <- read_excel(here("Final Data Products/mp_US.xlsx"))
+df_01 <- read_excel(here("mp_US.xlsx"))
 df_01 <- subset(df_01, year == 2001)
 df_01 <- select(df_01, c(fips, year, employed, labour_force, pop, unemployed))
 df_gdp_01 <- merge(df_01, gdp_01, by = "fips", all.x = TRUE)
@@ -1937,7 +1932,7 @@ test2 <- dplyr::select(test1, -c('realgdp_pc1', 'log_realgdp1'))
 allcomp_logs <- subset(test2, year != 2001)
 identical(allcomp_logs[,1:(length(allcomp_logs)-5)], allcomp)
 
-writexl::write_xlsx(allcomp_logs, here("Final Data Products/final_df_2022logs2.xlsx"))
+writexl::write_xlsx(allcomp_logs, here("final_df_2022logs2.xlsx"))
 
 # df_VA2 <- df_va(df_VA2)
 # df_VA2 = allcomp
