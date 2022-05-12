@@ -83,14 +83,11 @@ allcomp_cc <- subset(allcomp, fips %in% cclist)
 cc_cluster <- read_excel(here("data/cc_clusters_251.xlsx"))
 allcomp_cc_types <- merge(allcomp_cc, cc_cluster, by = "fips", all.x = TRUE)
 
-# Load required functions
+# Load required functions and dictionaries
 source("useful_functions.R")
 source("dicts.R")
+source("ref_lists.R")
 
-```
-
-```{r variable labels, include = FALSE}
- 
 ```
 
 ```{r}
@@ -132,6 +129,7 @@ stargazer(allcompccdf[c("diff_uer", "mines_diff","diff_log_realgdp",
 pdf <- pdata.frame(allcomp_full, index = c("fips", "year"))
 pdfcc <- pdata.frame(allcomp_cc, index = c("fips", "year"))
 
+
 relvars <- c("uer","diff_uer", "realgdp", "log_realgdp", "diff_log_realgdp", 
                                      "realgdp_pc", "logrealgdp_pc", "diff_log_realgdp_pc", 
                                      "employed", "log_employed", "diff_log_employed",
@@ -147,14 +145,19 @@ rel_tot = data.frame()
 for(l in 1:nrow(stat_tests)){
   lvar = stat_tests$var[[l]]
   print(lvar)
-  pval_int = purtest(eval(parse(text = paste0("pdf$",lvar, sep = ""))), pmax = 4, test = "hadri", exo = "intercept")
-  pval_trend = purtest(eval(parse(text = paste0("pdf$",lvar, sep = ""))), pmax = 4, test = "hadri", exo = "trend")
-  result_int = ifelse(pval_int$statistic$p.value <= 0.001, pval_int$statistic$alternative, paste0("NOT",pval_int$statistic$alternative))
-  result_trend = ifelse(pval_trend$statistic$p.value <= 0.001, pval_trend$statistic$alternative, paste0("NOT",pval_trend$statistic$alternative))
-  res_vec = c(c(lvar, pval_int$statistic$method, pval_int$statistic$p.value, result_int),
-              c(lvar, pval_trend$statistic$method, pval_trend$statistic$p.value, result_trend))
-  rel_tot <- rbind(rel_tot, res_vec)
+  pval1 = purtest(eval(parse(text = paste0("pdf$",lvar, sep = ""))), pmax = 4, test = "levinlin", exo = "none")
+  pval2 = purtest(eval(parse(text = paste0("pdf$",lvar, sep = ""))), pmax = 4, test = "levinlin", exo = "intercept")
+  pval3 = purtest(eval(parse(text = paste0("pdf$",lvar, sep = ""))), pmax = 4, test = "levinlin", exo = "trend")
+  result1 = ifelse(pval1$statistic$p.value <= 0.001, pval1$statistic$alternative, paste0("NOT",pval1$statistic$alternative))
+  result2 = ifelse(pval2$statistic$p.value <= 0.001, pval2$statistic$alternative, paste0("NOT",pval2$statistic$alternative))
+  result3 = ifelse(pval3$statistic$p.value <= 0.001, pval3$statistic$alternative, paste0("NOT",pval3$statistic$alternative))
+  rel_tot <- rbind(rel_tot,
+                   c(lvar, pval1$statistic$method, pval1$statistic$p.value, result1),
+                   c(lvar, pval2$statistic$method, pval2$statistic$p.value, result2),
+                   c(lvar, pval3$statistic$method, pval3$statistic$p.value, result3))
 }
+
+res_vectest = rbind(c(lvar, pval$statistic$method, pval$statistic$p.value, result), c(lvar, pval$statistic$method, pval$statistic$p.value, result), c(lvar, pval$statistic$method, pval$statistic$p.value, result))
 
  for(l in 1:nrow(stat_tests_cc)){
   lvar = stat_tests_cc$var[[l]]
@@ -170,6 +173,22 @@ for(l in 1:nrow(stat_tests)){
 
 pval_int$statistic$alternative
 pander(rel_tot)
+
+rel_cips_tot = data.frame()
+for(l in 1:nrow(stat_tests)){
+  lvar = stat_tests$var[[l]]
+  print(lvar)
+  pval_int = cipstest(eval(parse(text = paste0("pdf$",lvar, sep = ""))), type = "trend")
+  pval_trend = purtest(eval(parse(text = paste0("pdf$",lvar, sep = ""))), pmax = 4, test = "hadri", exo = "trend")
+  result_int = ifelse(pval_int$statistic$p.value <= 0.001, pval_int$statistic$alternative, paste0("NOT",pval_int$statistic$alternative))
+  result_trend = ifelse(pval_trend$statistic$p.value <= 0.001, pval_trend$statistic$alternative, paste0("NOT",pval_trend$statistic$alternative))
+  res_vec = c(c(lvar, pval_int$statistic$method, pval_int$statistic$p.value, result_int),
+              c(lvar, pval_trend$statistic$method, pval_trend$statistic$p.value, result_trend))
+  rel_cips_tot <- rbind(rel_cips_tot, res_vec)
+}
+
+cipstest(pdf$uer, type = "none")
+pvar(pdf)
 
 ```
 
@@ -347,6 +366,22 @@ log_pop <- feols(log_pop ~ mines_diff + lag_diff + lag_diff2 + log_realgdp |
 etable(uer_diff, log_emp, log_unemp, log_lf, log_pop)
 
 ```
+# Regressions without combined time periods
+
+The coefficient estimates are the same in each of these models isolating each variable.
+```{r}
+
+etable("t" = feols(diff_uer ~ mines_diff + diff_log_realgdp_pc | fips + year, allcomp, se = 'twoway'),
+       "t-1" = feols(diff_uer ~ lag_diff + diff_log_realgdp_pc | fips + year, allcomp, se = 'twoway'),
+       "t-2" = feols(diff_uer ~ lag_diff2 + diff_log_realgdp_pc | fips + year, allcomp, se = 'twoway'),
+       "t-3" = feols(diff_uer ~ lag_diff3 + diff_log_realgdp_pc | fips + year, allcomp, se = 'twoway'),
+       "t" = feols(diff_uer ~ mines_diff + diff_log_realgdp_pc | fips + year, allcomp_cc, se = 'twoway'),
+       "t-1" = feols(diff_uer ~ lag_diff + diff_log_realgdp_pc | fips + year, allcomp_cc, se = 'twoway'),
+       "t-2" = feols(diff_uer ~ lag_diff2 + diff_log_realgdp_pc | fips + year, allcomp_cc, se = 'twoway'),
+       "t-3" = feols(diff_uer ~ lag_diff3 + diff_log_realgdp_pc | fips + year, allcomp_cc, se = 'twoway'),tex= TRUE,
+       signifCode = c(`***` = 0.001, `**` = 0.01, `*` = 0.05, . = 0.1))
+
+```
 
 
 ```{r}
@@ -402,11 +437,11 @@ legend("topleft", legend = c("US Counties", "Coal Counties Only", "95% Confidenc
   y.intersp = 1.5
   )
 ```
+
 ```{r, include = FALSE}
 
 FE_diffuer3 <- as.formula("diff_uer ~ mines_diff + lag_diff + lag_diff2 +lag_diff3 + diff_log_realgdp_pc | fips + year")
 
-espos <- feols(FE_diffuer, allcomp, se = 'twoway')
 es_ccpos <- feols(FE_diffuer, allcomp_cc, panel.id = ~fips+year, se = 'twoway')
 es3pos <- feols(FE_diffuer3, allcomp, panel.id = ~fips+year, se = 'twoway')
 es3_ccpos <- feols(FE_diffuer3, allcomp_cc, panel.id = ~fips+year, se = 'twoway')
@@ -474,6 +509,8 @@ etable(model_9_both)
 # Mines_diff is different from zero (statistically significant at the .1% level) (-0.056%)
 glht(main, linfct = "mines_diff  = 0") %>% summary
 glht(main, linfct = "mines_diff + lag_diff + lag_diff2 = 0") %>% summary
+
+#glht(main, linfct = mcp(tension = c("mines_diff  = 0", "mines_diff + lag_diff + lag_diff2 = 0")))
 
 # Mines_diff + mines_diff:neg_diff is different from zero (statistically significant at the 1% level)
 # Higher coefficient value than in broader model (-0.078%)
@@ -790,9 +827,12 @@ etable("REE Model" = feols(diff_uer ~ mines_diff + lag_diff + lag_diff2 + mines_
 ree_model_main = feols(diff_uer ~ mines_diff + lag_diff + lag_diff2 + mines_diff:REE_bin_top90 +
                              lag_diff:REE_bin_top90 + lag_diff2:REE_bin_top90 + REE_bin_top90 + diff_log_realgdp_pc | fips + year, allcomp,  se = 'twoway')
 
-etable(feols(diff_uer ~ mines_diff + mines_diff:REE_bin_top90 + mines_diff:l(REE_bin_top90, 1) + mines_diff:l(REE_bin_top90, 2) + diff_log_realgdp_pc | fips + year, allcomp, panel.id = ~fips+year,se = 'twoway'))
-etable(feols(diff_uer ~ lag_diff + lag_diff:l(REE_bin_top90, 1) + lag_diff:l(REE_bin_top90, 2) + lag_diff:l(REE_bin_top90, 3) + diff_log_realgdp_pc | fips + year, allcomp, panel.id = ~fips+year,se = 'twoway'))
-etable(feols(diff_uer ~ lag_diff2 + lag_diff2:l(REE_bin_top90, 2) + lag_diff2:l(REE_bin_top90, 3) + lag_diff2:l(REE_bin_top90, 4)+ diff_log_realgdp_pc | fips + year, allcomp, panel.id = ~fips+year,se = 'twoway'))
+etable(feols(diff_uer ~ mines_diff + mines_diff:REE_bin_top90 + mines_diff:l(REE_bin_top90, 1) + mines_diff:l(REE_bin_top90, 2) + diff_log_realgdp_pc | fips + year, allcomp, panel.id = ~fips+year,se = 'twoway'),
+       feols(diff_uer ~ mines_diff + mines_diff:REE_bin_top90 + diff_log_realgdp_pc | fips + year, allcomp, panel.id = ~fips+year,se = 'twoway'),
+       feols(diff_uer ~ mines_diff + mines_diff:l(REE_bin_top90, 1) + diff_log_realgdp_pc | fips + year, allcomp, panel.id = ~fips+year,se = 'twoway'),
+       feols(diff_uer ~ mines_diff + mines_diff:l(REE_bin_top90, 2) + diff_log_realgdp_pc | fips + year, allcomp, panel.id = ~fips+year,se = 'twoway'))
+
+etable(feols(diff_uer ~ lag_diff2 + lag_diff2:l(REE_bin_top90, 2) + lag_diff2:l(REE_bin_top90, 3) + lag_diff2:l(REE_bin_top90, 4) + diff_log_realgdp_pc | fips + year, allcomp, panel.id = ~fips+year,se = 'twoway'))
 ```
 
 
@@ -826,15 +866,18 @@ phtest(diff_uer ~ mines_diff + lag_diff + lag_diff2 + diff_log_realgdp_pc,
         w = fmat)
 
 # Confirms presence of cross sectional dependence
-pcdtest(diff_uer ~ mines_diff + lag_diff + lag_diff2 + diff_log_realgdp_pc, 
+tests <- c("cd", "lm", "sclm", "rho", "absrho")
+
+cdtest <- lapply(tests,function(x) pcdtest(diff_uer ~ mines_diff + lag_diff + lag_diff2 + diff_log_realgdp_pc, 
         data = allcomp_full, effect = "twoways", index = c("fips", "year"),
-        test = c("absrho"),
-        w = fmat)
+        test = x,
+        w = fmat))
 
 # Randomization-based test of spatial dependence for panel models
 # All of the following confirm cross-sectional dependence robust to global 
 # dependence by common factors and persistence (serial correlation) in the data (Millo 2017)
 #"rho" for the average correlation coefficient
+# These return identical results...why?
 
 rwtest(diff_uer ~ mines_diff + lag_diff + lag_diff2 + diff_log_realgdp_pc, 
         data = allcomp_full, test = "rho", w = fmat, effect = "twoways", index = c("fips", "year"))

@@ -14,7 +14,7 @@ output:
 knit: (function(inputFile, encoding) { 
   rmarkdown::render(inputFile, 
   encoding = encoding, 
-  output_format = "pdf_document", 
+  output_format = "html_document", 
   output_dir = here::here("output")) 
   })
 ---
@@ -48,21 +48,21 @@ library(viridis)
 
 conflict_prefer("filter", "dplyr")
 conflict_prefer("select", "dplyr")
+source("ref_lists.R")
 ```
 # Data
 ```{r,  echo=FALSE}
-here::i_am("Final Data Products/final_df_2022full.xlsx")
-typ_coal <- read_excel(here("Final Data Products/typ_coal.xlsx"))
-typ_us <- read_excel(here("Final Data Products/typ_total_us.xlsx"))
+typ_coal <- read_excel(here("data/typ_coal.xlsx"))
+typ_us <- read_excel(here("data/typ_total_us.xlsx"))
 typ_us <- subset(typ_us, fips != "11001")
-final_cc <- read_excel(here("final_cc.xlsx"))
+final_cc <- read_excel(here("data/final_cc.xlsx"))
 
 # Creates typology sheet using coal counties as identified in regression work
 # final_cc has combined statistical area of Wise and Norton (fips: 51955) but 
 # demographic characteristics are divided into Wise (fips: 51195) and Norton (fips: 51720)
 
 cc <- subset(typ_us, typ_us$fips %in% final_cc$fips | typ_us$fips == 51195 | typ_us$fips == 51720)
-cc_pdmif <- subset(typ_us, typ_us$fips %in% allcomp_pdmif$fips | typ_us$fips == 51195 | typ_us$fips == 51720)
+cc_pdmif <- subset(cc, !(cc$fips %in% const_fips))
 
 ```
 
@@ -77,19 +77,25 @@ cluster_coal2 <- data.frame(cluster_coal, row.names = 1)
 scaled_coalcluster <- scale(cluster_coal2)
 
 # Indicates optimal clusters between 2-4
-fviz_nbclust(scaled_coalcluster, hcut, method = "wss")
+fviz_nbclust(scaled_coalcluster, hcut, method = "wss")+
+labs(title= NULL)
 
 # Indicates optimal clusters 2
-fviz_nbclust(scaled_coalcluster, hcut, method = "silhouette")
+fviz_nbclust(scaled_coalcluster, hcut, method = "silhouette")+
+labs(title= NULL)
 
 # Indicates optimal clusters 1
 gap_stat <- clusGap(scaled_coalcluster, hcut, K.max = 10)
-fviz_gap_stat(gap_stat)
+fviz_gap_stat(gap_stat)+
+labs(title= NULL)
 
 
 res_k3 <- eclust(scaled_coalcluster, k = 3,  "hclust")
+
 res_k3$size
-fviz_cluster(res_k3)
+fviz_cluster(res_k3, pointsize = .5, labelsize = NULL, show.clust.cent = TRUE)
+
+
 cc <- data.frame(cc, res_k3$cluster)
 names(cc)[names(cc) == "res_k3.cluster"] <- "cluster"
 
@@ -130,12 +136,12 @@ stargazer(as.data.frame(cluster_coal[,c("RUC_2013","POPESTIMATE2019",
                              "Educational Attainment: Bachelor's Degree or Higher %; aged 25-64",
                              "Median Earnings USD","Female Labour Force Participation %; aged 25-64",
                              "Chmura Diversity Index", "Voted for the Republican Party in the 2020 Election", "Voted for the Republican Party in the 2020 Election"), notes = "* The number of coal counties included in the typology (252) differs from the number identified in the econometric analysis (251) because Wise County, Virginia and Norton City, Virginia  are considered separately by the various entities reporting data for the typology characteristics. They are combined into one county area by the Bureau of Economic Analysis whose method was used as the standard used for the econometric analysis.")
+
 ```
 
 # Clustering on 237 coal counties suggested from PDMIF work 
 
 ```{r}
-
 
 cluster_coal_pdmif <- cc_pdmif[,c("fips","RUC_2013","POPESTIMATE2019", 
                             "ed_over_25_bachelor_or_higher", "med_earnings",
@@ -145,14 +151,17 @@ cluster_coal3 <- data.frame(cluster_coal_pdmif, row.names = 1)
 pdmifscaled_coalcluster <- scale(cluster_coal3)
 
 # Indicates optimal clusters between 2-4
-fviz_nbclust(pdmifscaled_coalcluster, hcut, method = "wss")
+fviz_nbclust(pdmifscaled_coalcluster, hcut, method = "wss")+
+labs(title= NULL)
 
 # Indicates optimal clusters 2
-fviz_nbclust(pdmifscaled_coalcluster, hcut, method = "silhouette")
+fviz_nbclust(pdmifscaled_coalcluster, hcut, method = "silhouette")+
+labs(title= NULL)
 
 # Indicates optimal clusters 1
 gap_stat <- clusGap(pdmifscaled_coalcluster, hcut, K.max = 10)
-fviz_gap_stat(gap_stat)
+fviz_gap_stat(gap_stat)+
+labs(title= NULL)
 
 
 res2_k3 <- eclust(pdmifscaled_coalcluster, k = 3,  "hclust")
@@ -191,36 +200,33 @@ cluster_coal_pdmif <- cc_pdmif[,c("fips","RUC_2013","POPESTIMATE2019",
 cluster_coal_pdmif$party_20_bin <- ifelse(cluster_coal_pdmif$party == "REPUBLICAN", 1, 0)
 cluster_coal_pdmif$party_16_bin <- ifelse(cluster_coal_pdmif$party_16 == "REPUBLICAN", 1, 0)
 
-
 ```
 
 
 
 ```{r}
-cluster_map <- read_excel(here("Final Data Products/cc_clusters_251.xlsx"))
-cluster_map <- cc
+cluster_map <- read_excel(here("data/cc_clusters_251.xlsx"))
 cluster_map$type = 0
 cluster_map$type[which(cluster_map$cluster == 1)] = 2
 cluster_map$type[which(cluster_map$cluster == 2)] = 1
 cluster_map$type[which(cluster_map$cluster == 3)] = 3
 
-pdmif_map <- subset(cluster_map, fips %in% allcomp_pdmif$fips)
+pdmif_map <- subset(cluster_map, fips %in% cc_pdmif$fips)
 cluster_map$type = as.factor(cluster_map$type)
+pdmif_map$type = as.factor(pdmif_map$type)
 
 
 plot_usmap(data = pdmif_map, values = "type", regions = "counties", col = "gray90", size = 0.04, exclude = c("AK", "HI" )) + 
   scale_fill_viridis_d(name = "County Type", labels = c("Type 1", "Type 2", "Type 3", "No active mines 2002-2019"), na.value = "gray80") +
-    theme(panel.background = element_rect(color = "white", fill = "white"), text = element_text(family = "Times New Roman", color = "gray10"),
+    theme(panel.background = element_rect(color = "white", fill = "white"),
           plot.title = element_text(face = "bold"), legend.background=element_blank())
 
 plot_usmap(data = cluster_map, values = "type", regions = "counties", col = "gray90", size = 0.04, exclude = c("AK", "HI" )) + 
   scale_fill_viridis_d(name = "County Type", labels = c("Type 1", "Type 2", "Type 3", "No active mines 2002-2019"), na.value = "gray80") +
-    theme(panel.background = element_rect(color = "white", fill = "white"), text = element_text(family = "Times New Roman", color = "gray10"),
+    theme(panel.background = element_rect(color = "white", fill = "white"),
           plot.title = element_text(face = "bold"), legend.background=element_blank())
 
-allcomp_pdmif <- subset(allcomp_cc_types, !(fips %in% const_fips))
-
-ggsave("County_types_252.jpg", units="in", width=9, height=6, dpi=300)
+#ggsave("County_types_252.jpg", units="in", width=9, height=6, dpi=300)
 ```
 
 # Create df with clusters for regressions
@@ -249,14 +255,18 @@ scaled_ogcluster <- scale(cluster_og2)
 
 
 # Indicates optimal clusters 2-5
-fviz_nbclust(scaled_ogcluster, hcut, method = "wss")
+fviz_nbclust(scaled_ogcluster, hcut, method = "wss")+
+labs(title= NULL)
 
 # Indicates optimal clusters 2
-fviz_nbclust(scaled_ogcluster, hcut, method = "silhouette")
+fviz_nbclust(scaled_ogcluster, hcut, method = "silhouette")+
+labs(title= NULL)
 
 # Indicates optimal clusters 3
 gap_stat <- clusGap(scaled_ogcluster, hcut, K.max = 10)
-fviz_gap_stat(gap_stat)
+
+fviz_gap_stat(gap_stat)+
+labs(title= NULL)
 
 # Automatically produces list of 3 clusters
 res_kog <- eclust(scaled_ogcluster, "hclust")
@@ -275,11 +285,10 @@ typ_og <- data.frame(typ_og, res_kog$cluster)
 # Testing on entire country
 ```{r}
 
-typ_total_us <- subset(typ_total_us, substr(fips, 1,2) != "02" & substr(fips, 1,2) != "15" & fips != "11001")
-typ_total_us <- subset(typ_total_us, !is.na(typ_total_us$diversity_index))
-cluster_usa <- typ_total_us[,c("fips","RUC_2013","POPESTIMATE2019", "ed_over_25_bachelor_or_higher", "med_earnings","lfpr_20_64_female", "diversity_index")]
-cluster_usa <- subset(cluster_usa, !is.na(cluster_usa$diversity_index))
-writexl::write_xlsx(cluster_usa, "/Users/ebbamark/OneDrive - Nexus365/Ebba Dissertation Materials/Final Data Products/cluster_usa.xlsx")
+typ_us <- subset(typ_us, substr(fips, 1,2) != "02" & substr(fips, 1,2) != "15" & fips != "11001")
+typ_us <- subset(typ_us, !is.na(typ_us$diversity_index))
+cluster_usa <- typ_us[,c("fips","RUC_2013","POPESTIMATE2019", "ed_over_25_bachelor_or_higher", "med_earnings","lfpr_20_64_female", "diversity_index")]
+# writexl::write_xlsx(cluster_usa, "/Users/ebbamark/OneDrive - Nexus365/Ebba Dissertation Materials/Final Data Products/cluster_usa.xlsx")
 
 cluster_usa2 <- data.frame(cluster_usa, row.names = 1)
 scaled_uscluster <- scale(cluster_usa2)
@@ -287,15 +296,18 @@ scaled_uscluster <- scale(cluster_usa2)
 #scaled_uscoal <- subset(scaled_uscluster, row.names(scaled_uscluster) %in% cluster_mines$fips)
 
 
-# Indicates optimal clusters 2 - 6
-fviz_nbclust(scaled_uscluster, hcut, method = "wss")
+# Indicates optimal clusters 2 - 5
+fviz_nbclust(scaled_uscluster, hcut, method = "wss")+
+labs(title= NULL)
 
 # Indicates optimal clusters 2
-fviz_nbclust(scaled_uscluster, hcut, method = "silhouette")
+fviz_nbclust(scaled_uscluster, hcut, method = "silhouette")+
+labs(title= NULL)
 
 # Indicates optimal clusters 3
 gap_stat <- clusGap(scaled_uscluster, hcut, B = 50, K.max = 10)
-fviz_gap_stat(gap_stat)
+fviz_gap_stat(gap_stat)+
+labs(title= NULL)
 
 # Automatically produces list of 3 clusters
 res_usa <- eclust(scaled_uscluster, "hclust", k = 3)
@@ -303,19 +315,19 @@ res_usa$size
 aggregate(cluster_usa, by=list(cluster=res_usa$cluster), mean)
 fviz_cluster(res_usa)
 
-typ_total_us <- data.frame(typ_total_us, res_usa$cluster)
-typ_total_us$us_clustertype = as.factor(typ_total_us$res_usa.cluster)
+typ_us <- data.frame(typ_us, res_usa$cluster)
+typ_us$us_clustertype = as.factor(typ_us$res_usa.cluster)
 
 colMeans(cluster_usa[,-1])
 
-sum(is.na(typ_total_us$party_16))
+sum(is.na(typ_us$party_16))
 
 # 167
-sum(typ_total_us$party_16 == "DEMOCRAT" & res_usa$cluster == 1)
+sum(typ_us$party_16 == "DEMOCRAT" & res_usa$cluster == 1)
 # 103
-sum(typ_total_us$party_16 == "DEMOCRAT" & res_usa$cluster == 2)
+sum(typ_us$party_16 == "DEMOCRAT" & res_usa$cluster == 2)
 # 214
-sum(typ_total_us$party_16 == "DEMOCRAT" & res_usa$cluster == 3)
+sum(typ_us$party_16 == "DEMOCRAT" & res_usa$cluster == 3)
 
 
 ```
@@ -420,10 +432,10 @@ for (j in (1:nrow(cluster_mines))) {
   print(j)
   partytest = cluster_mines$fips[j]
   print(partytest)
-  ptest = typ_total_us$type[which(usa_types$fips == ftest)]
-  if (typ_total_us$party_16[which(typ_total_us$fips == partytest)] == "DEMOCRAT")
+  ptest = typ_us$type[which(usa_types$fips == ftest)]
+  if (typ_us$party_16[which(typ_us$fips == partytest)] == "DEMOCRAT")
   {dem = dem + 1}
-  if (typ_total_us$party_16[which(typ_total_us$fips == partytest)] == "REPUBLICAN")
+  if (typ_us$party_16[which(typ_us$fips == partytest)] == "REPUBLICAN")
   {rep = rep + 1}
   else {print("warning")}
 }
@@ -459,7 +471,7 @@ plot_usmap(data = typ_og, values = "res_kog.cluster", regions = "counties", col 
     scale_fill_discrete(name = "Cluster Type", na.value = "white") + 
   theme(panel.background = element_rect(color = "black", fill = "gray90"))
 
-plot_usmap(data = typ_total_us, values = "us_clustertype", regions = "counties", col = "black", size = 0.05) + 
+plot_usmap(data = typ_us, values = "us_clustertype", regions = "counties", col = "black", size = 0.05) + 
   labs(title = "Geographical Distribution of Overall US County Types",
        subtitle = "Each of the aforementioned US county types is outlined above and denoted below by distinct colors.") + 
     scale_fill_discrete(name = "Cluster Type", na.value = "white") + 
