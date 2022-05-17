@@ -45,6 +45,7 @@ library(stargazer)
 library(usmap)
 library(ggplot2)
 library(viridis)
+library(fmsb)
 
 conflict_prefer("filter", "dplyr")
 conflict_prefer("select", "dplyr")
@@ -137,6 +138,46 @@ stargazer(as.data.frame(cluster_coal[,c("RUC_2013","POPESTIMATE2019",
                              "Median Earnings USD","Female Labour Force Participation %; aged 25-64",
                              "Chmura Diversity Index", "Voted for the Republican Party in the 2020 Election", "Voted for the Republican Party in the 2020 Election"), notes = "* The number of coal counties included in the typology (252) differs from the number identified in the econometric analysis (251) because Wise County, Virginia and Norton City, Virginia  are considered separately by the various entities reporting data for the typology characteristics. They are combined into one county area by the Bureau of Economic Analysis whose method was used as the standard used for the econometric analysis.")
 
+
+```
+# Radar plot
+```{r}
+
+mins <- cluster_coal[,2:7] %>% summarise_all(min) %>% append(., 1) %>% as.data.frame  %>% `rownames<-`("min")
+maxs <- cluster_coal[,2:7] %>% summarise_all(max)  %>% append(., 0) %>% as.data.frame %>% `rownames<-`("max")
+names(mins) <-  c(names(mins[-7]),"rep_pct")
+names(maxs) <-  c(names(maxs[-7]),"rep_pct")
+
+cc_radar <- cc_output %>%  t %>% as.data.frame %>% mutate(rep_pct = `9`/`res_k3$size`) %>%  select(RUC_2013, POPESTIMATE2019, ed_over_25_bachelor_or_higher, med_earnings, lfpr_20_64_female, diversity_index, rep_pct) %>% rbind(maxs, mins, .)
+
+
+cc_radar$RUC_2013[which(rownames(cc_radar) == "max")] = 1
+cc_radar$RUC_2013[which(rownames(cc_radar) == "min")] = 9
+
+cc_radar$diversity_index[which(rownames(cc_radar) == "max")] = min(cluster_coal$diversity_index)
+cc_radar$diversity_index[which(rownames(cc_radar) == "min")] = max(cluster_coal$diversity_index)
+
+par(xpd = TRUE, mar = c(2, 1, 2, 1))
+radarchart(cc_radar, 
+           vlabels = c("Urban",
+                                     "Population     \n Size     ",
+                                     "Educational             \nAttainment             ",
+                                     "Median\nEarnings",
+                                     "     Female\n     LFPR",
+                                     "          Economic\n          Diversity",
+           "Democrat"), 
+           pcol = viridis(3), vlcex = 0.9, plty = 1, plwd = 3, cglcol = "gray10")
+
+```
+
+```{r}
+
+plot(NULL ,xaxt='n',yaxt='n',bty='n',ylab='',xlab='', xlim=0:1, ylim=0:1)
+legend(
+  x = "bottom", legend = rownames(cc_radar[-c(1,2),]), horiz = TRUE,
+  bty = "n", pch = 20, col = viridis(3),
+  text.col = "black", cex = 1, pt.cex = 2, inset = c(0,-.3), xpd = TRUE
+  )
 ```
 
 # Clustering on 237 coal counties suggested from PDMIF work 
@@ -283,7 +324,7 @@ typ_og <- data.frame(typ_og, res_kog$cluster)
 ```
 
 # Testing on entire country
-```{r}
+```{r, eval = FALSE, include = FALSE}
 
 typ_us <- subset(typ_us, substr(fips, 1,2) != "02" & substr(fips, 1,2) != "15" & fips != "11001")
 typ_us <- subset(typ_us, !is.na(typ_us$diversity_index))
