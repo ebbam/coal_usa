@@ -148,6 +148,7 @@ for(l in 1:nrow(stat_tests)){
   pval1 = purtest(eval(parse(text = paste0("pdf$",lvar, sep = ""))), pmax = 4, test = "levinlin", exo = "none")
   pval2 = purtest(eval(parse(text = paste0("pdf$",lvar, sep = ""))), pmax = 4, test = "levinlin", exo = "intercept")
   pval3 = purtest(eval(parse(text = paste0("pdf$",lvar, sep = ""))), pmax = 4, test = "levinlin", exo = "trend")
+  pval4 = purtest(eval(parse(text = paste0("pdf$",lvar, sep = ""))), pmax = 4, test = "hadri", exo = "trend")
   result1 = ifelse(pval1$statistic$p.value <= 0.001, pval1$statistic$alternative, paste0("NOT",pval1$statistic$alternative))
   result2 = ifelse(pval2$statistic$p.value <= 0.001, pval2$statistic$alternative, paste0("NOT",pval2$statistic$alternative))
   result3 = ifelse(pval3$statistic$p.value <= 0.001, pval3$statistic$alternative, paste0("NOT",pval3$statistic$alternative))
@@ -157,7 +158,6 @@ for(l in 1:nrow(stat_tests)){
                    c(lvar, pval3$statistic$method, pval3$statistic$p.value, result3))
 }
 
-res_vectest = rbind(c(lvar, pval$statistic$method, pval$statistic$p.value, result), c(lvar, pval$statistic$method, pval$statistic$p.value, result), c(lvar, pval$statistic$method, pval$statistic$p.value, result))
 
  for(l in 1:nrow(stat_tests_cc)){
   lvar = stat_tests_cc$var[[l]]
@@ -171,6 +171,7 @@ res_vectest = rbind(c(lvar, pval$statistic$method, pval$statistic$p.value, resul
   rel_tot <- rbind(rel_tot, res_veci, res_vect)
  }
 
+purtest(pdf$uer, pmax = 4, test = "madwu", exo = "intercept")
 pval_int$statistic$alternative
 pander(rel_tot)
 
@@ -832,7 +833,10 @@ etable(feols(diff_uer ~ mines_diff + mines_diff:REE_bin_top90 + mines_diff:l(REE
        feols(diff_uer ~ mines_diff + mines_diff:l(REE_bin_top90, 1) + diff_log_realgdp_pc | fips + year, allcomp, panel.id = ~fips+year,se = 'twoway'),
        feols(diff_uer ~ mines_diff + mines_diff:l(REE_bin_top90, 2) + diff_log_realgdp_pc | fips + year, allcomp, panel.id = ~fips+year,se = 'twoway'))
 
-etable(feols(diff_uer ~ lag_diff2 + lag_diff2:l(REE_bin_top90, 2) + lag_diff2:l(REE_bin_top90, 3) + lag_diff2:l(REE_bin_top90, 4) + diff_log_realgdp_pc | fips + year, allcomp, panel.id = ~fips+year,se = 'twoway'))
+etable(feols(diff_uer ~ lag_diff2 + diff_log_realgdp_pc | fips + year, allcomp, panel.id = ~fips+year,se = 'twoway'),
+       feols(diff_uer ~ lag_diff2 + lag_diff2:l(REE_bin_top90, 1) + diff_log_realgdp_pc | fips + year, allcomp, panel.id = ~fips+year,se = 'twoway'),
+       feols(diff_uer ~ lag_diff2 + lag_diff2:l(REE_bin_top90, 2) + diff_log_realgdp_pc | fips + year, allcomp, panel.id = ~fips+year,se = 'twoway'),
+       feols(diff_uer ~ lag_diff2 + lag_diff2:l(REE_bin_top90, 2) + lag_diff2:l(REE_bin_top90, 1) + diff_log_realgdp_pc | fips + year, allcomp, panel.id = ~fips+year,se = 'twoway'), signifCode = c(`***` = 0.001, `**` = 0.01, `*` = 0.05, . = 0.1))
 ```
 
 
@@ -1379,10 +1383,13 @@ In preliminary application of phtt package with two-way fixed effects, the third
 change1_KSS <- KSS(dep_diff_uer ~ -1 + ind_mines_diff + ind_lag_diff + ind_lag_diff2 + ind_difflogrealgdppc, additive.effects = "individual", factor.dim = 1)
 change2_KSS <- KSS(dep_diff_uer ~ -1 + ind_mines_diff + ind_lag_diff + ind_lag_diff2 + ind_difflogrealgdppc, additive.effects = "individual", factor.dim = 2)
 
-summary(change1_KSS)
+saved <- summary(change1_KSS)
+saved$
 plot(summary(change2_KSS))
 summary(change2_KSS)
 plot(summary(change2_KSS))
+
+fixInNamespace("KSS.default","phtt")
 
 
 ```
@@ -1407,17 +1414,18 @@ Results:
 #| fig.height: 5
 # KSS estimation with individual effects only and 1,2 factors
 change1_KSStw <- KSS(dep_diff_uer ~ -1 + ind_mines_diff + ind_lag_diff + ind_lag_diff2 + ind_difflogrealgdppc, additive.effects = "twoways", factor.dim = 1)
-change2_KSStw <- KSS(dep_diff_uer ~ -1 + ind_mines_diff + ind_lag_diff + ind_lag_diff2 + ind_difflogrealgdppc, additive.effects = "twoways", factor.dim = 2)
+change3_KSStw <- KSS(dep_diff_uer ~ -1 + ind_mines_diff + ind_lag_diff + ind_lag_diff2 + ind_difflogrealgdppc, additive.effects = "twoways", factor.dim = 3)
 
 # Results: Regressing UER on change in active mines (+lag) using KSS specification 
 # with 2,3,4 factors
 # fixInNamespace("summary.KSS", "phtt")
+# # Return ee
 # n = 55422
-# 
-test1 <- summary(change1_KSStw)
-#(1 + log(test1$RSS) +log((2*pi)/n))*(-1*(n/2))
-test2 <- summary(change2_KSStw)
-#(1 + log(test2$RSS) +log((2*pi)/n))*(-1*(n/2))
+# # 
+# test1 <- summary(change1_KSStw)
+# (1 + log(test1$RSS) +log((2*pi)/n))*(-1*(n/2))
+# test2 <- summary(change2_KSStw)
+# (1 + log(test2$RSS) +log((2*pi)/n))*(-1*(n/2))
 
 # SSR increase after nfactors = 1.
 # To report: 1,2 dimensions
