@@ -620,6 +620,13 @@ test <- allcomp_cc_types %>%
 test2 <- subset(test, (m1 == 1 & m1mean == 0) | (m2 == 1 & m2mean == 0) | (m3 == 1 & m3mean == 0))
 const_fips <- unique(test2$fips)
 allcomp_pdmif <- subset(allcomp_cc_types, !(fips %in% const_fips))
+filter(allcomp_cc_types, fips %in% const_fips) %>% 
+  group_by(fips) %>% 
+  summarize(mean = mean(active_mines), max = max(active_mines), min = min(active_mines))
+allcomp_pdmif %>% 
+  group_by(fips) %>% 
+  summarize(mean = mean(active_mines), max = max(active_mines), min = min(active_mines)) %>% View()
+
 
 etable("REE Model Rural" = feols(diff_uer ~ mines_diff + lag_diff + lag_diff2 + mines_diff:REE_bin_top90 +
                              lag_diff:REE_bin_top90 + lag_diff2:REE_bin_top90 + REE_bin_top90 + diff_log_realgdp_pc | fips + year, cc_ruraldf,  se = 'twoway'),
@@ -877,6 +884,11 @@ cdtest <- lapply(tests,function(x) pcdtest(diff_uer ~ mines_diff + lag_diff + la
         test = x,
         w = fmat))
 
+pcdtest(diff_uer ~ mines_diff + lag_diff + lag_diff2 + diff_log_realgdp_pc, 
+        data = allcomp_full, effect = "twoways", index = c("fips", "year"),
+        test = "rho",
+        w = fmat)
+
 # Randomization-based test of spatial dependence for panel models
 # All of the following confirm cross-sectional dependence robust to global 
 # dependence by common factors and persistence (serial correlation) in the data (Millo 2017)
@@ -917,9 +929,7 @@ rwtest(diff_uer ~ mines_diff + lag_diff + lag_diff2 + diff_log_realgdp_pc,
 #slmtest(diff_uer ~ mines_diff + lag_diff + lag_diff2 + diff_log_realgdp_pc,
 #        data = allcomp_full, listw = fmatlw, test="rlml", model="within")
 
-# Moran test
-# Moran test for residuals:
-# moran.test(as.data.frame(sp_err_mines$residuals), listw = fmatlw)
+
 
 ```
 
@@ -956,9 +966,11 @@ sp_err_mines <- spml(fmdiff_uer, allcomp_full,
                      index = NULL,  listw = fmatlw, lag = FALSE, na.action = na.fail, 
                      spatial.error = "b",  model = "within", effect = "twoways", quiet = FALSE)
 
+
 sp_lag_mines <- spml(fmdiff_uer, allcomp_full, index = NULL,  listw = fmatlw,
                      lag = TRUE, na.action = na.fail,
                      spatial.error = "none",  model = "within", effect = "twoways", quiet = FALSE)
+
 
 # Only used to test whether unadjusted loglikelihood yields different AIC and BIC results
 # sp_lag_mines_unadjll <- spml(fmdiff_uer, allcomp_full, index = NULL,  listw = fmatlw,
@@ -968,6 +980,7 @@ sp_lag_mines <- spml(fmdiff_uer, allcomp_full, index = NULL,  listw = fmatlw,
 sp_err_lag_mines <- spml(fmdiff_uer, data = allcomp_full, index = NULL,  listw = fmatlw, 
                          lag = TRUE, na.action = na.fail, spatial.error = "b",
                          model = "within", effect = "twoways", quiet = FALSE)
+
 
 # sp_err_mines$logLik
 # sp_lag_mines$logLik
@@ -990,10 +1003,56 @@ summary(sp_err_mines)
 summary(implag, zstats=TRUE, short=TRUE)
 summary(imperrlag, zstats=TRUE, short=TRUE)
 
-# residuals(sp_lag_mines)
-# merged <- allcomp_full %>%
-#   mutate(residuals_lag = residuals(sp_lag_mines), residuals_lagerr = residuals(sp_err_lag_mines), residuals_err = residuals(sp_err_mines))
-#moran.test(merged$residuals_lag, listw = fmatlw, zero.policy = FALSE)
+mainfull <- feols(FE_diffuer, allcomp_full, se = 'twoway')
+merged <- allcomp_full %>%
+   mutate(residuals_lag = residuals(sp_lag_mines), residuals_lagerr = residuals(sp_err_lag_mines), residuals_err = residuals(sp_err_mines), residuals_main = residuals(mainfull))
+
+#moran.mc(merged$residuals_lag, listw = fmatlw, 1000, zero.policy = TRUE)
+
+for(i in 2002:2019){
+  print(moran.mc(merged$residuals_lag[which(merged$year == i)], listw = fmatlw, 1000, zero.policy = TRUE))
+}
+
+mergedp <- pdata.frame(merged, index = c("fips", "year"))
+#moran.mc(mergedp$residuals_lag, listw = fmatlw, 1000, zero.policy = TRUE)
+# PCD cross-sectional dependence of residuals: 
+# Main: reject independence: p-value: 2.2e-16
+# rho: 0.0047673
+pcdtest(mergedp$residuals_main, test = "cd")
+pcdtest(mergedp$residuals_main, test = "rho")
+# SAR: reject independence: p-value: 0.01644
+# rho: -0.00026
+pcdtest(mergedp$residuals_err,listw = fmatlw, test = "cd")
+pcdtest(mergedp$residuals_err,listw = fmatlw, test = "rho")
+# SLM: reject independence: p-value: 0.036
+# rho: -0.00027
+pcdtest(mergedp$residuals_lag, listw = fmatlw,test = "cd")
+pcdtest(mergedp$residuals_lag, listw = fmatlw,test = "rho")
+
+# SARAR: reject independence: p-value: 0.0425
+# rho: -0.00022
+pcdtest(mergedp$residuals_lagerr, listw = fmatlw, test = "cd")
+pcdtest(mergedp$residuals_lagerr, listw = fmatlw, test = "rho")
+
+ssr_spatial <- merged %>% 
+  group_by(fips) %>%
+  summarise(ssr_err = sum(residuals_err^2), ssr_lag = sum(residuals_lag^2), ssr_errlag = sum(residuals_lagerr^2), ssr_main = sum(residuals_main^2))
+
+moran.mc(ssr_spatial$ssr_main, listw = fmatlw, 1000, zero.policy = TRUE)
+moran.mc(ssr_spatial$ssr_err, listw = fmatlw, 1000, zero.policy = TRUE)
+moran.mc(ssr_spatial$ssr_lag, listw = fmatlw, 1000, zero.policy = TRUE)
+moran.mc(ssr_spatial$ssr_errlag, listw = fmatlw, 1000, zero.policy = TRUE)
+
+ssr_spatial <- df_va(ssr_spatial)
+
+for (i in 1:length(names(ssr_spatial)[-1])){
+  mod = names(ssr_spatial[i+1])
+  k <- plot_usmap(data = ssr_spatial, values = mod, regions = "counties", col = "black", size = 0.07, exclude = c("AK", "HI" )) +
+  labs(title = paste0("Geographical Distribution of SSR in ",mod,"model")) +
+  scale_fill_viridis(name = "ssr",  na.value = "seashell2") +
+  theme(panel.background = element_rect(colour = "black", fill = "gray90"))
+  print(k)
+}
 
 ```
 

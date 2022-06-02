@@ -267,7 +267,70 @@ plot_usmap(data = cluster_map, values = "type", regions = "counties", col = "gra
     theme(panel.background = element_rect(color = "white", fill = "white"),
           plot.title = element_text(face = "bold"), legend.background=element_blank())
 
+
+
 #ggsave("County_types_252.jpg", units="in", width=9, height=6, dpi=300)
+```
+```{r}
+setwd("/Users/ebbamark/Downloads/CoalFieldsUS")
+install.packages("sf")
+library(sf)
+require(sf)
+library(viridis)
+coalfields <- read_sf(dsn = ".", layer = "CoalFieldsUS")
+coalfields <- subset(coalfields, PROVINCE != "Alaska")
+#view(coalfields)
+setwd("/Users/ebbamark/Downloads/cb_2018_us_county_20m")
+counties <- read_sf(dsn = ".", layer = "cb_2018_us_county_20m")
+
+counties <- subset(counties, STATEFP != "02" & STATEFP != "15" & STATEFP != "72")
+
+#mine_df_19 %>% filter(!(mine_df_19$fips %in% mine_df19$fips)) %>% View()
+
+shp_mine <- mine_df_19[,c("fips", "active_mines")]
+names(shp_mine)[names(shp_mine) == "fips"] <- "GEOID"
+shp_mine %>% filter(!(shp_mine$GEOID %in% counties$GEOID)) %>% View()
+
+counties_test <- merge(counties, shp_mine, by = "GEOID", all.x = TRUE)
+mines_layer <- subset(counties_test, !is.na(active_mines))
+
+ggplot() + 
+  geom_sf(data = mines_layer, colour = "black", size = 0.05, mapping = aes(fill = active_mines))
+#counties_test$active_mines[is.na(counties_test$active_mines)] <- 0
+
+
+ggplot() + 
+  geom_sf(data = counties_test, colour = "grey", size = 0.08, fill = alpha("powderblue", 0.3)) + # mapping = aes(fill = active_mines)) +
+  geom_sf(fill = "transparent", color = "grey10", size = 0.08, 
+          data = counties_test %>% summarise()) +
+   #scale_fill_continuous(name = "Active Mines", na.value = "white") + 
+  geom_sf(data = coalfields, colour = NA, fill = alpha("slategray4", 0.6), size = 0.05) +
+  geom_sf(data = mines_layer, colour = "black", size = 0.05, mapping = aes(fill = active_mines)) +
+ #scale_fill_manual(name = "Active Mines", values = c("sienna3",  "palegreen4", "darkblue"), na.value = "seashell2") +
+  scale_fill_viridis(option = "D", name = "Active Mines", na.value = "white") +
+  theme_bw()+
+  coord_sf(datum = NA)
+
+
+plot_usmap(data = cluster_mines, values = "cluster_type_trans", regions = "counties", col = "black", size = 0.07, exclude = c("AK", "HI" )) + 
+  scale_fill_manual(name = "Cluster Type", labels = c("Type 1", "Type 2", "Type 3", "No active mines in 2019"), values = c("sienna3",  "palegreen4", "darkblue"), na.value = "seashell2") +
+  theme(panel.background = element_rect(color = "black", fill = "white"))
+
+
+mine_df_19 <- subset(mine_df, year == 2019)
+mine_df_19 <- subset(mine_df_19, active_mines != 0)
+mine_df_19 <- subset(mine_df_19, state != "AK")
+
+plot_usmap(data = mine_df_19, values = "active_mines", regions = "counties", col = "black", size = 0.05, exclude = c("AK", "HI")) + 
+  labs(title = "Geographical distribution of active coal mines in 2019") + 
+  scale_fill_continuous(name = "Active Mines", na.value = "white") + 
+  theme(panel.background = element_rect(color = "black", fill = "gray90"), legend.key.size = unit(0.3, 'cm'))
+
+plot_usmap(data = ff_2019, values = "ff_exists", regions = "counties", col = "black", size = 0.05, exclude = c("AK", "HI")) + 
+  labs(title = "Geographical Distribution of US Employment in Fossil Fuel Production", 
+       subtitle = "Counties reporting oil, gas, and/or coal employment in 2019.") + 
+  scale_fill_manual(name = "Fossil Fuel Employment", values = "slateblue", na.value = "white") + 
+  theme(panel.background = element_rect(color = "black", fill = "gray90"), legend.position = "none")
 ```
 
 # Create df with clusters for regressions
