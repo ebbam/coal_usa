@@ -18,9 +18,9 @@ knit: (function(inputFile, encoding) {
   output_dir = here::here("output")) 
   })
 ---
-  
+
 # Set-up
-  
+
 ```{r, echo=FALSE}
 knitr::opts_chunk$set(comment = NA, echo = TRUE, eval = TRUE, 
                       warning = FALSE, message = FALSE, 
@@ -28,6 +28,7 @@ knitr::opts_chunk$set(comment = NA, echo = TRUE, eval = TRUE,
 ```
 
 # Libraries
+
 ```{r, message = FALSE}
 
 # core libraries
@@ -51,7 +52,9 @@ conflict_prefer("filter", "dplyr")
 conflict_prefer("select", "dplyr")
 source("ref_lists.R")
 ```
+
 # Data
+
 ```{r,  echo=FALSE}
 typ_coal <- read_excel(here("data/typ_coal.xlsx"))
 typ_us <- read_excel(here("data/typ_total_us.xlsx"))
@@ -68,6 +71,7 @@ cc_pdmif <- subset(cc, !(cc$fips %in% const_fips))
 ```
 
 # Analysis
+
 ```{r}
 # Clustering on 251 coal counties claiming analysed in regression section
 cluster_coal <- cc[,c("fips","RUC_2013","POPESTIMATE2019", 
@@ -140,7 +144,9 @@ stargazer(as.data.frame(cluster_coal[,c("RUC_2013","POPESTIMATE2019",
 
 
 ```
+
 # Radar plot
+
 ```{r}
 
 mins <- cluster_coal[,2:7] %>% summarise_all(min) %>% append(., 1) %>% as.data.frame  %>% `rownames<-`("min")
@@ -148,7 +154,7 @@ maxs <- cluster_coal[,2:7] %>% summarise_all(max)  %>% append(., 0) %>% as.data.
 names(mins) <-  c(names(mins[-7]),"rep_pct")
 names(maxs) <-  c(names(maxs[-7]),"rep_pct")
 
-cc_radar <- cc_output %>%  t %>% as.data.frame %>% mutate(rep_pct = `9`/`res_k3$size`) %>%  select(RUC_2013, POPESTIMATE2019, ed_over_25_bachelor_or_higher, med_earnings, lfpr_20_64_female, diversity_index, rep_pct) %>% rbind(maxs, mins, .)
+cc_radar <- cc_output1 %>%  t %>% as.data.frame %>% mutate(rep_pct = as.numeric(`9`)/as.numeric(`res_k3$size`)) %>%  select(RUC_2013, POPESTIMATE2019, ed_over_25_bachelor_or_higher, med_earnings, lfpr_20_64_female, diversity_index, rep_pct) %>% rbind(maxs, mins, .)
 
 
 cc_radar$RUC_2013[which(rownames(cc_radar) == "max")] = 1
@@ -157,6 +163,9 @@ cc_radar$RUC_2013[which(rownames(cc_radar) == "min")] = 9
 cc_radar$diversity_index[which(rownames(cc_radar) == "max")] = min(cluster_coal$diversity_index)
 cc_radar$diversity_index[which(rownames(cc_radar) == "min")] = max(cluster_coal$diversity_index)
 
+cc_radar <- cc_radar %>% mutate(across(everything(.), as.numeric))
+
+#jpeg(filename ="output/radarchart.jpg", width = 1024, height = 768)
 par(xpd = TRUE, mar = c(2, 1, 2, 1))
 radarchart(cc_radar, 
            vlabels = c("Urban",
@@ -166,21 +175,27 @@ radarchart(cc_radar,
                                      "     Female\n     LFPR",
                                      "          Economic\n          Diversity",
            "Democrat"), 
-           pcol = viridis(3), vlcex = 0.9, plty = 1, plwd = 3, cglcol = "gray10")
+           pcol = c(viridis(3), "grey40"), pty = c(16,16,16,20), vlcex = 2, plty = c(1,1,1,5), plwd = c(5,5,5,3), cglcol = "gray10")
+#dev.off()
+
+
+plot(NULL ,xaxt='n',yaxt='n',bty='n',ylab='',xlab='', xlim=0:1, ylim=0:1)
+legend(
+  x = "bottom", legend = c("    Type 1\n(50 counties)", 
+                           "      Type 2\n(160 counties)", 
+                           "     Type 3\n(42 counties)", 
+                           "  US Average\n(3,107 counties)"), horiz = TRUE,
+  bty = "n", pch = 20, col = c(viridis(3), "grey40"),
+  text.col = "black", cex = 1, pt.cex = 2, inset = c(0,0), xpd = TRUE, 
+  )
 
 ```
 
 ```{r}
 
-plot(NULL ,xaxt='n',yaxt='n',bty='n',ylab='',xlab='', xlim=0:1, ylim=0:1)
-legend(
-  x = "bottom", legend = rownames(cc_radar[-c(1,2),]), horiz = TRUE,
-  bty = "n", pch = 20, col = viridis(3),
-  text.col = "black", cex = 1, pt.cex = 2, inset = c(0,-.3), xpd = TRUE
-  )
 ```
 
-# Clustering on 237 coal counties suggested from PDMIF work 
+# Clustering on 237 coal counties suggested from PDMIF work
 
 ```{r}
 
@@ -243,8 +258,6 @@ cluster_coal_pdmif$party_16_bin <- ifelse(cluster_coal_pdmif$party_16 == "REPUBL
 
 ```
 
-
-
 ```{r}
 cluster_map <- read_excel(here("data/cc_clusters_251.xlsx"))
 cluster_map$type = 0
@@ -262,78 +275,76 @@ plot_usmap(data = pdmif_map, values = "type", regions = "counties", col = "gray9
     theme(panel.background = element_rect(color = "white", fill = "white"),
           plot.title = element_text(face = "bold"), legend.background=element_blank())
 
+#ggsave("County_types_252.jpg", units="in", width=9, height=6, dpi=300)
+```
+
+```{r}
+library(sf)
+require(sf)
+library(viridis)
+coalfields <- read_sf(dsn = "data", layer = "CoalFieldsUS")
+coalfields <- subset(coalfields, PROVINCE != "Alaska")
+counties <- read_sf(dsn = "data", layer = "cb_2018_us_county_20m")
+counties <- subset(counties, STATEFP != "02" & STATEFP != "15" & STATEFP != "72")
+
+
+shp_mine <- cluster_map[,c("fips", "type")]
+shp_mine <- subset(rbind(shp_mine, c("51720", 2), c("51195", 2)), fips != "51955")
+
+
+names(shp_mine)[names(shp_mine) == "fips"] <- "GEOID"
+shp_mine %>% filter(!(shp_mine$GEOID %in% counties$GEOID)) %>% View()
+
+counties_test <- merge(counties, shp_mine, by = "GEOID", all.x = TRUE)
+mines_layer <- subset(counties_test, !is.na(type))
+counties_test$type <- as.factor(counties_test$type)
+
+
 plot_usmap(data = cluster_map, values = "type", regions = "counties", col = "gray90", size = 0.04, exclude = c("AK", "HI" )) + 
   scale_fill_viridis_d(name = "County Type", labels = c("Type 1", "Type 2", "Type 3", "No active mines 2002-2019"), na.value = "gray80") +
     theme(panel.background = element_rect(color = "white", fill = "white"),
           plot.title = element_text(face = "bold"), legend.background=element_blank())
 
 
-
-#ggsave("County_types_252.jpg", units="in", width=9, height=6, dpi=300)
-```
-```{r}
-setwd("/Users/ebbamark/Downloads/CoalFieldsUS")
-install.packages("sf")
-library(sf)
-require(sf)
-library(viridis)
-coalfields <- read_sf(dsn = ".", layer = "CoalFieldsUS")
-coalfields <- subset(coalfields, PROVINCE != "Alaska")
-#view(coalfields)
-setwd("/Users/ebbamark/Downloads/cb_2018_us_county_20m")
-counties <- read_sf(dsn = ".", layer = "cb_2018_us_county_20m")
-
-counties <- subset(counties, STATEFP != "02" & STATEFP != "15" & STATEFP != "72")
-
-#mine_df_19 %>% filter(!(mine_df_19$fips %in% mine_df19$fips)) %>% View()
-
-shp_mine <- mine_df_19[,c("fips", "active_mines")]
-names(shp_mine)[names(shp_mine) == "fips"] <- "GEOID"
-shp_mine %>% filter(!(shp_mine$GEOID %in% counties$GEOID)) %>% View()
-
-counties_test <- merge(counties, shp_mine, by = "GEOID", all.x = TRUE)
-mines_layer <- subset(counties_test, !is.na(active_mines))
-
 ggplot() + 
-  geom_sf(data = mines_layer, colour = "black", size = 0.05, mapping = aes(fill = active_mines))
-#counties_test$active_mines[is.na(counties_test$active_mines)] <- 0
-
-
-ggplot() + 
-  geom_sf(data = counties_test, colour = "grey", size = 0.08, fill = alpha("powderblue", 0.3)) + # mapping = aes(fill = active_mines)) +
-  geom_sf(fill = "transparent", color = "grey10", size = 0.08, 
-          data = counties_test %>% summarise()) +
+  geom_sf(data = coalfields, colour = NA, fill = alpha("lightsteelblue", 0.5), size = 1) +
+  geom_sf(data = counties_test, colour = "grey", size = 0.04, mapping = aes(fill = type)) +
+  geom_sf(fill = "transparent", color = "grey50", size = 0.2, 
+           data = counties_test %>% summarise()) +
    #scale_fill_continuous(name = "Active Mines", na.value = "white") + 
-  geom_sf(data = coalfields, colour = NA, fill = alpha("slategray4", 0.6), size = 0.05) +
-  geom_sf(data = mines_layer, colour = "black", size = 0.05, mapping = aes(fill = active_mines)) +
- #scale_fill_manual(name = "Active Mines", values = c("sienna3",  "palegreen4", "darkblue"), na.value = "seashell2") +
-  scale_fill_viridis(option = "D", name = "Active Mines", na.value = "white") +
-  theme_bw()+
+  scale_fill_viridis_d(name = "County Type", labels = c("Type 1", "Type 2", "Type 3", "No active mines 2002-2019"), na.value = alpha("grey",0.2))+
+  theme(panel.background = element_rect(color = "white", fill = "white"),
+          plot.title = element_text(face = "bold"), legend.background=element_blank(), legend.position = "bottom")+
   coord_sf(datum = NA)
 
+#ggsave("output/county_types_map.jpg")
 
-plot_usmap(data = cluster_mines, values = "cluster_type_trans", regions = "counties", col = "black", size = 0.07, exclude = c("AK", "HI" )) + 
-  scale_fill_manual(name = "Cluster Type", labels = c("Type 1", "Type 2", "Type 3", "No active mines in 2019"), values = c("sienna3",  "palegreen4", "darkblue"), na.value = "seashell2") +
-  theme(panel.background = element_rect(color = "black", fill = "white"))
+```
+
+```{r}
+# plot_usmap(data = cluster_mines, values = "cluster_type_trans", regions = "counties", col = "black", size = 0.07, exclude = c("AK", "HI" )) + 
+#   scale_fill_manual(name = "Cluster Type", labels = c("Type 1", "Type 2", "Type 3", "No active mines in 2019"), values = c("sienna3",  "palegreen4", "darkblue"), na.value = "seashell2") +
+#   theme(panel.background = element_rect(color = "black", fill = "white"))
 
 
-mine_df_19 <- subset(mine_df, year == 2019)
-mine_df_19 <- subset(mine_df_19, active_mines != 0)
-mine_df_19 <- subset(mine_df_19, state != "AK")
-
-plot_usmap(data = mine_df_19, values = "active_mines", regions = "counties", col = "black", size = 0.05, exclude = c("AK", "HI")) + 
-  labs(title = "Geographical distribution of active coal mines in 2019") + 
-  scale_fill_continuous(name = "Active Mines", na.value = "white") + 
-  theme(panel.background = element_rect(color = "black", fill = "gray90"), legend.key.size = unit(0.3, 'cm'))
-
-plot_usmap(data = ff_2019, values = "ff_exists", regions = "counties", col = "black", size = 0.05, exclude = c("AK", "HI")) + 
-  labs(title = "Geographical Distribution of US Employment in Fossil Fuel Production", 
-       subtitle = "Counties reporting oil, gas, and/or coal employment in 2019.") + 
-  scale_fill_manual(name = "Fossil Fuel Employment", values = "slateblue", na.value = "white") + 
-  theme(panel.background = element_rect(color = "black", fill = "gray90"), legend.position = "none")
+# mine_df_19 <- subset(mine_df, year == 2019)
+# mine_df_19 <- subset(mine_df_19, active_mines != 0)
+# mine_df_19 <- subset(mine_df_19, state != "AK")
+# 
+# plot_usmap(data = mine_df_19, values = "active_mines", regions = "counties", col = "black", size = 0.05, exclude = c("AK", "HI")) + 
+#   labs(title = "Geographical distribution of active coal mines in 2019") + 
+#   scale_fill_continuous(name = "Active Mines", na.value = "white") + 
+#   theme(panel.background = element_rect(color = "black", fill = "gray90"), legend.key.size = unit(0.3, 'cm'))
+# 
+# plot_usmap(data = ff_2019, values = "ff_exists", regions = "counties", col = "black", size = 0.05, exclude = c("AK", "HI")) + 
+#   labs(title = "Geographical Distribution of US Employment in Fossil Fuel Production", 
+#        subtitle = "Counties reporting oil, gas, and/or coal employment in 2019.") + 
+#   scale_fill_manual(name = "Fossil Fuel Employment", values = "slateblue", na.value = "white") + 
+#   theme(panel.background = element_rect(color = "black", fill = "gray90"), legend.position = "none")
 ```
 
 # Create df with clusters for regressions
+
 ```{r}
 cc_cluster <- cc[c("fips", "cluster")]
 cc_cluster$type[which(cc_cluster$cluster == 1)] = 2
@@ -346,8 +357,8 @@ cc_cluster <- cc_cluster[!duplicated(cc_cluster$fips),]
 # writexl::write_xlsx(cc_cluster, here("Final Data Products/cc_clusters_251.xlsx"))
 ```
 
-
 # Testing on Oil and Gas
+
 ```{r, eval = FALSE, include = FALSE}
 
 # NEED TO REMOVE HAWAII, ALASKA, DC!
@@ -387,6 +398,7 @@ typ_og <- data.frame(typ_og, res_kog$cluster)
 ```
 
 # Testing on entire country
+
 ```{r, eval = FALSE, include = FALSE}
 
 typ_us <- subset(typ_us, substr(fips, 1,2) != "02" & substr(fips, 1,2) != "15" & fips != "11001")
@@ -435,7 +447,6 @@ sum(typ_us$party_16 == "DEMOCRAT" & res_usa$cluster == 3)
 
 
 ```
-
 
 ```{r, eval = FALSE, include = FALSE}
 
@@ -547,7 +558,6 @@ for (j in (1:nrow(cluster_mines))) {
 
 ```
 
-
 ```{r, eval = FALSE, include = FALSE}
 
 cluster_mines$type_trans = 0
@@ -581,5 +591,5 @@ plot_usmap(data = typ_us, values = "us_clustertype", regions = "counties", col =
     scale_fill_discrete(name = "Cluster Type", na.value = "white") + 
   theme(panel.background = element_rect(color = "black", fill = "gray90"))
 
-```
 
+```
