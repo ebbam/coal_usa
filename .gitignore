@@ -7,3 +7,7 @@
 .RDataTmp1
 .Renviron
 .DS_Store
+*.zip
+/Results_cache/html
+/Results_cache
+Results_cache/html/__packages
