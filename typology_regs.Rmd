@@ -1,0 +1,203 @@
+---
+title: "typology_controls"
+author: "Ebba Mark"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+Incorporates the typology variables themselves as control variables in the regression itself. 
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+library(here)
+library(tidyverse)
+library(fixest)
+library(readxl)
+library(plm)
+library(multcomp)
+conflicted::conflict_prefer_all("dplyr", quiet = TRUE)
+
+df <- read_excel(here("data/allcomp_final.xlsx"))
+
+# Typology indicators
+
+df %>% 
+  select(fips, year, mines_diff, lag_diff, lag_diff2, ruc, ruc_bin, log_pop, diff_log_pop, diff_log_realgdp_pc) 
+
+```
+
+## Main model
+
+```{r}
+
+FE_diffuer <- as.formula("diff_uer ~ mines_diff + lag_diff + lag_diff2 + diff_log_realgdp_pc | fips + year")
+
+main <- feols(FE_diffuer, df, se = 'twoway')
+main
+
+```
+
+## BEA FIPS Code Modifications
+```{r}
+# Unmodified lookup table to adjust FIPS codes between various standards
+bea_fips_mods <- read_excel(here("data/FIPSModificationsVA.xlsx"), skip = 1, col_types = c("text", "text","text","text"))
+
+# Create lookup table to convert VA FIPS codes
+getfips <- bea_fips_mods$`BEA FIPS`
+names(getfips) <- bea_fips_mods$FIPS
+
+```
+
+
+## Census API Key
+```{r}
+census_key = "0b9039bd3038272ab0afe94e28911dcb9b9b7d43"
+```
+
+## Controls
+ACS API:
+
+Geographical level: 050
+% Bachelors degree or higher: DP02_0068PE
+
+DP02_0062PE	Percent!!EDUCATIONAL ATTAINMENT!!Population 25 years and over!!High school graduate (includes equivalency)
+DP02_0067PE	Percent!!EDUCATIONAL ATTAINMENT!!Population 25 years and over!!High school graduate or higher
+DP03_0092E	Estimate!!INCOME AND BENEFITS (IN 2022 INFLATION-ADJUSTED DOLLARS)!!Median earnings for workers (dollars)
+
+Information about missing data in ACS: https://www.census.gov/programs-surveys/acs/guidance/estimates.html
+```{r}
+# Educational attainment
+api_list = list("median_earnings" = "DP03_0092E",	#Estimate!!INCOME AND BENEFITS (IN 2022 INFLATION-ADJUSTED DOLLARS)!!Median earnings for workers (dollars)
+  "ed_25_over_bachelors_or_higher" = "DP02_0068PE",
+                "ed_25_over_hse" = "DP02_0062PE",	#Percent!!EDUCATIONAL ATTAINMENT!!Population 25 years and over!!High school graduate (includes equivalency)
+                "ed_25_over_hse_or_higher" = "DP02_0067PE"	#Percent!!EDUCATIONAL ATTAINMENT!!Population 25 years and over!!High school graduate or higher 
+                )
+
+control_temp <- tibble()
+for(yr in 2019:2009){
+    url <- paste0("https://api.census.gov/data/", as.character(yr),"/acs/acs5/profile?get=", 
+                    paste0(api_list, collapse = ","),"&for=county:*&key=",census_key)
+  # }else{
+  #   url <- paste0("https://api.census.gov/data/", as.character(yr),"/acs/acs1/profile?get=DP03_0092E&for=county:*&key=",census_key)
+  # }
+    temp <- read.csv(url, header = TRUE, colClasses = "character") %>% 
+      tibble %>% 
+        rename("median_earnings" = "X..DP03_0092E",	#Estimate!!INCOME AND BENEFITS (IN 2022 INFLATION-ADJUSTED DOLLARS)!!Median earnings for workers (dollars)
+  "ed_25_over_bachelors_or_higher" = "DP02_0068PE",
+                "ed_25_over_hse" = "DP02_0062PE",	#Percent!!EDUCATIONAL ATTAINMENT!!Population 25 years and over!!High school graduate (includes equivalency)
+                "ed_25_over_hse_or_higher" = "DP02_0067PE",
+               county = county.) %>%
+        mutate(median_earnings = as.numeric(gsub("[", "", median_earnings, fixed = TRUE)),
+               across(c(ed_25_over_bachelors_or_higher, ed_25_over_hse, ed_25_over_hse_or_higher), ~as.numeric(.)),
+           county = gsub("]", "", county, fixed = TRUE),
+           fips_cb = paste0(state, county),
+           year = yr) %>%
+        select(-c(X, state, county))
+    control_temp <- rbind(control_temp, temp)
+}
+
+# restrict to full sample size:
+# ACS 5-year estimates only available from 2009
+control_temp <- control_temp %>%
+  filter(year >= 2009 & !(substr(fips_cb, 1,2) %in% c("15", "02"))) %>% 
+  mutate(fips_cb = ifelse(fips_cb == "46113", "46102", fips_cb),
+         # There are a few missing values for median earnings which are reported as high negative values, replace with NA below
+         median_earnings = ifelse(median_earnings < 0, NA, median_earnings))
+is.pbalanced(control_temp, index = c("fips_cb", "year"))
+control_temp$fips <- sapply(control_temp$fips_cb, function(x) ifelse(x %in% bea_fips_mods$FIPS, getfips[x], x)) 
+control_temp %>% 
+  filter(fips != fips_cb) %>% 
+  group_by(fips_cb) %>% 
+  mutate(test = n_distinct(fips)) %>% 
+  filter(test != 1) %>% nrow(.) == 0
+
+
+# Female LFPR
+# description: https://api.census.gov/data/2022/acs/acs1/subject/variables/S2301_C02_023E.json
+# {
+#   "name": "S2301_C02_023E",
+#   "label": "Estimate!!Labor Force Participation Rate!!Population 20 to 64 years!!SEX!!Female",
+#   "concept": "Employment Status",
+#   "predicateType": "float",
+#   "group": "S2301",
+#   "limit": 0,
+#   "attributes": "S2301_C02_023EA,S2301_C02_023M,S2301_C02_023MA"
+# }
+
+flfpr_controls <- tibble()
+for(yr in 2010:2019){
+  url <- paste0("https://api.census.gov/data/",as.character(yr),"/acs/acs5/subject?get=S2301_C02_023E&for=county:*&key=",census_key)
+  temp <- read.csv(url, header = TRUE, colClasses = "character") %>% 
+        tibble %>% 
+          rename("flfpr" = 1, county = county.) %>%
+          mutate(flfpr = as.numeric(gsub("[", "", flfpr, fixed = TRUE)),
+             county = gsub("]", "", county, fixed = TRUE),
+             fips_cb = paste0(state, county),
+             year = yr) %>%
+          select(-c(X, state, county))
+  print(temp)
+  flfpr_controls <- rbind(flfpr_controls, temp)
+}
+
+flfpr_controls <- flfpr_controls %>% 
+  filter(year >= 2012 & !(substr(fips_cb, 1,2) %in% c("15", "02"))) %>% 
+  mutate(fips_cb = ifelse(fips_cb == "46113", "46102", fips_cb),
+         # There are a few missing values for median earnings which are reported as high negative values, replace with NA below
+         flfpr = ifelse(flfpr < 0, NA, flfpr/100))
+
+flfpr_controls$fips <- sapply(flfpr_controls$fips_cb, function(x) ifelse(x %in% bea_fips_mods$FIPS, getfips[x], x)) 
+flfpr_controls %>% 
+  filter(fips != fips_cb) %>% 
+  group_by(fips_cb) %>% 
+  mutate(test = n_distinct(fips)) %>% 
+  filter(test != 1) %>% nrow(.) == 0
+
+
+is.pbalanced(flfpr_controls, index = c("fips_cb", "year"))
+
+# Left_join with control_temp as master because it excludes non-state territories (ie. Guam, American Samoa, Virgin Islands, Puerto Rico, etc.)
+control_temp %>% 
+  select(-fips_cb) %>% 
+  left_join(., select(flfpr_controls, -fips_cb), by = c("fips", "year")) -> controls
+
+
+typ_df <- df %>% 
+  left_join(., controls, by = c("fips", "year")) %>%
+  filter(year >= 2009) %>% 
+  mutate(log_median_earnings = log(median_earnings))
+
+typ_df %>% filter(year >=2012 & is.na(flfpr))
+typ_df %>% filter(is.na(median_earnings))
+typ_df %>% filter(is.na(ed_25_over_hse_or_higher))
+typ_df %>% filter(is.na(ruc_bin))
+typ_df %>% filter(is.na(ruc))
+is.pbalanced(typ_df)
+
+typ_df %>% 
+  select(median_earnings, ed_25_over_hse, ruc, ruc_bin, flfpr) %>% data.frame() %>% stargazer(type = "text")
+
+```
+
+
+```{r pressure, echo=FALSE}
+
+typ_controls_2009 <- as.formula("diff_uer ~ mines_diff + lag_diff + lag_diff2 + diff_log_realgdp_pc + log_pop + ruc_bin + log(median_earnings) +  ed_25_over_bachelors_or_higher | fips + year")
+typ_controls_all <- as.formula("diff_uer ~ mines_diff + lag_diff + lag_diff2 + diff_log_realgdp_pc + log_pop + ruc + log(median_earnings) +                + ed_25_over_bachelors_or_higher + flfpr | fips + year")
+
+
+feols(typ_controls_2009, typ_df, se = "twoway")
+
+feols(typ_controls_fd, typ_df, se = "twoway")
+
+
+
+```
+
+## Original rural control
+```{r}
+\
+feols(diff_uer ~ mines_diff + lag_diff + lag_diff2 +  mines_diff:ruc_bin + lag_diff:ruc_bin + lag_diff2:ruc_bin + diff_log_realgdp_pc | 
+               fips + year, df, se = 'twoway') %>% glht(., linfct = "lag_diff2 + lag_diff2:ruc_bin == 0") %>% summary
+```
+
