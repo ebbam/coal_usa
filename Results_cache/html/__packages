@@ -39,3 +39,4 @@ texreg
 kableExtra
 pander
 beeswarm
+RColorBrewer
