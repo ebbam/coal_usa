@@ -7,17 +7,23 @@ output: html_document
 
 # Overview
 
-The following script conducts the main typology analysis reported in the manuscript.
+The following script conducts the various additional robustness checks reported
+in the Supplementary Materials of the main manuscript including analysis of mine size heterogeneity, county-level dependence on coal mining, calculation of total employment loss numbers, exploration of persistent unemplyment rate effects, panel error corrected model, renewable energy investments. Each code block is labelled as it is in the Supplementary Materials to ease reading/searching.
 
 The script produces the results reported in:
- - Supplementary Tables ...
- - Supplementary Figures ...
+ - Supplementary Figures S6, S7
+ - Supplementary Tables S12, S31-S37, S39, S40, S43-S50
 
 The script draws on the following scripts and data sources:
 Data Sources:
  - data/Econometrics_Final.xlsx: input data to econometric analysis
- - data/Typology_Final.xlsx: input data to typology clustering analysis
- - data/CoalFieldsUS/: all relevant shape files in CoalFieldsUS to outline US coal fields on Figure 5
+ - data/production_capacity/allcomp_cap_prod.RDS: production and state productive capacity data as compiled in prod_cap_cleaning.R
+- data/FIPSModificationsVA.xlsx: crosswalk between selected Virginia fips codes that differ between the Bureau of Economic Analysis and Census Bureau
+- data/cc_clusters_251.xlsx: dataset documenting the "type" of each county as calculated in main_typology.Rmd. This is an output of main_typology.Rmd
+ - data/county_adjacency.txt: county adjacency matrix
+ - data/industry-titles.xlsx: NAICS industry codes look-up file
+ - data/qcew_compiled_raw_2000_2022.RDS: compiled data from US Census Bureau's Quarterly Census on Employment and Wages used to calculate sector-level employment impacts
+
  
 Scripts:
 - code/dicts.R: provides fixest and other dictionaries for regression output and summary statistics tables
@@ -484,7 +490,7 @@ emp_df <- temp %>%
 
 is.pbalanced(emp_df)
 
-allcomp_final <- read_excel("data/Econometrics_Final.xlsx") %>% 
+allcomp_emp <- read_excel("data/Econometrics_Final.xlsx") %>% 
   left_join(., emp_df, by = c("fips", "year"))
 
 # Also create a variable for the coal share of total employment
@@ -688,7 +694,10 @@ job_loss_ests <- allcomp_final %>%
          asymm_effect_neg_single = ifelse(sign(mines_diff) == -1, labour_force*coef_neg*sign(mines_diff), 0),
          asymm_effect_pos_single = ifelse(sign(mines_diff) == 1, labour_force*coef_pos, 0)) 
 
-
+total_absolute <- job_loss_ests %>% 
+  group_by(year) %>% 
+  summarise(across(c(mines_diff, ue_effect_neg, ue_effect_pos, ue_effect_net,  asymm_effect_neg, asymm_effect_pos, asymm_effect_net), ~sum(., na.rm = TRUE))) %>% 
+  ungroup
 
 
 ###############################################################################
@@ -816,24 +825,23 @@ summary_stats %>%
 ###############################################################################
 #### SUPPLEMENTARY TABLE S12
 
-for(sample in list(allcomp_cc, allcomp_final)){
-  model_mines <- feols(FE_diffuer, sample, se = 'twoway')
+model_mines <- feols(FE_diffuer, allcomp_final, se = 'twoway')
   
-  model_neg= feols(diff_uer ~ mines_diff + neg_diff:mines_diff + 
+model_neg= feols(diff_uer ~ mines_diff + neg_diff:mines_diff + 
                      lag_diff + neg_lag_diff:lag_diff +
                      lag_diff2 + neg_lag_diff2:lag_diff2 + 
                      diff_log_realgdp_pc | 
-                     fips + year, sample, se = 'twoway')
+                     fips + year, allcomp_final, se = 'twoway')
   
-  model_pos = feols(diff_uer ~ mines_diff + pos_diff:mines_diff + 
+model_pos = feols(diff_uer ~ mines_diff + pos_diff:mines_diff + 
                       lag_diff + pos_lag_diff:lag_diff + 
                       lag_diff2 + pos_lag_diff2:lag_diff2 + 
                       diff_log_realgdp_pc | 
-                      fips + year, sample, se = 'twoway')
+                      fips + year, allcomp_final, se = 'twoway')
   
-  model_list <- list()
-  hyps <- data.frame()
-  for(k in c("mines", "neg", "pos")){
+model_list <- list()
+hyps <- data.frame()
+for(k in c("mines", "neg", "pos")){
     temp_mod <- eval(parse(text = paste0("model_", k)))
     temp_names <- names(temp_mod$coefficients)[!(names(temp_mod$coefficients) == "diff_log_realgdp_pc")]
     coef_ht = temp_names[!grepl("lag", temp_names)] %>% paste(., collapse = " + ") %>% paste(., " = 0") 
@@ -854,9 +862,9 @@ for(sample in list(allcomp_cc, allcomp_final)){
                   c("p-value", NA))
   }
   
-  rename_vector <- c("","","","","","") 
-  colnames(hyps) <- c("Test", "Null Hypothesis")
-  hyps <- hyps %>% 
+rename_vector <- c("","","","","","") 
+colnames(hyps) <- c("Test", "Null Hypothesis")
+hyps <- hyps %>% 
     mutate(test = gsub("mines_diff ", "Beta_{1} ", `Null Hypothesis`),
            test = gsub(' lag_diff ', " Beta_{2} ", test),
            test = gsub(' lag_diff2 ', " Beta_{3} ", test),
@@ -868,9 +876,9 @@ for(sample in list(allcomp_cc, allcomp_final)){
            test = gsub("lag_diff2:pos_lag_diff2", "Beta_{9}", test)) %>% 
     select(-`Null Hypothesis`) %>% 
     rename(`Null Hypothesis` = test)
-  attr(hyps, 'position') <- c(1, 2)
-  model_list %>% modelsummary(stars= TRUE, statistic = c("std.error", "p.value"), coef_rename =  rename_vector, add_columns = hyps, type = "latex") %>% print
-}
+attr(hyps, 'position') <- c(1, 2)
+model_list %>% modelsummary(stars= TRUE, statistic = c("std.error", "p.value"), coef_rename =  rename_vector, add_columns = hyps, type = "latex") %>% print
+
 
 
 ###############################################################################
