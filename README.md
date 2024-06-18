@@ -1,6 +1,8 @@
-# README: Replicating Mark, Rafaty, Schwarz:
-### "Spatial-temporal dynamics of employment shocks in declining coal mining regions and potentialities of the 'just transition'". 
-##### Currently available on arxiv: https://arxiv.org/abs/2211.12619
+# README: Replicating "Spatial-temporal dynamics of employment shocks in declining coal mining regions and potentialities of the 'just transition'"
+### Working paper currently available on arxiv: https://arxiv.org/abs/2211.12619
+### Authors: Ebba Mark, Ryan Rafaty, Moritz Schwarz
+### Repository Author: Ebba Mark
+
 
 The following repository allows for the replication of "Spatial-temporal dynamics of employment shocks in declining coal mining regions and potentialities of the 'just transition'" - Mark, Rafaty, Schwarz. Currently available on arxiv: https://arxiv.org/abs/2211.12619
 
