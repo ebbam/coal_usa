@@ -1,0 +1,296 @@
+---
+date: "`r Sys.Date()`"
+author: Ebba Mark
+title: "Replication Code - Typology"
+output: 
+  html_document:
+    theme: "lumen"
+    code_download: true
+    toc: true
+    toc_float: true
+    toc_depth: 2
+    number_sections: true
+    df_print: paged
+knit: (function(inputFile, encoding) { 
+  rmarkdown::render(inputFile, 
+  encoding = encoding, 
+  output_format = "html_document", 
+  output_dir = here::here("output")) 
+  })
+---
+
+# Overview
+
+The following script conducts the main typology analysis reported in the manuscript.
+
+The script produces the results reported in:
+- Main text
+- Figures 4-5
+- Data used to create Figure 6 in main_econometrics.Rmd
+- Supplementary Tables S7, S23-S24
+- Supplementary Figures S2-4 
+
+The script draws on the following scripts and data sources:
+Data Sources:
+- data/Econometrics_Final.xlsx: input data to econometric analysis
+- data/Typology_Final.xlsx: input data to typology clustering analysis
+- data/CoalFieldsUS/: all relevant shape files in CoalFieldsUS to outline US coal fields on Figure 5
+
+# Set-up
+
+```{r, echo=FALSE}
+knitr::opts_chunk$set(comment = NA, echo = TRUE, eval = TRUE, 
+                      warning = FALSE, message = FALSE, 
+                      fig.width = 6, fig.height = 4)
+```
+
+# Libraries
+
+```{r, message = FALSE}
+
+# core libraries
+library(conflicted)
+library(tidyverse)
+library(readxl)
+library(here)
+library(kableExtra)
+library(vtable)
+library(cluster)   
+library(factoextra)
+library(flexclust)
+library(xtable)
+library(stargazer)
+library(usmap)
+library(ggplot2)
+library(viridis)
+library(fmsb)
+
+conflict_prefer("filter", "dplyr")
+conflict_prefer("select", "dplyr")
+
+setwd(here("replication_code"))
+```
+
+# Data
+
+```{r,  echo=FALSE}
+# Read in main econometrics dataset to isolate coal mining counties 
+# (ie. any counties that have had active mines in the time period concerned)
+allcomp <- read_excel("data/Econometrics_Final.xlsx")
+cclist <- unique(allcomp$fips[which(allcomp$active_mines != 0)])
+
+length(cclist) == 251
+
+typ_us <- read_excel("data/Typology_Final.xlsx")
+# Creates typology sheet using coal counties as identified in regression work
+# allcomp has combined statistical area of Wise and Norton (fips: 51955) but 
+# demographic characteristics are divided into Wise (fips: 51195) and Norton (fips: 51720)
+typ_coal <- typ_us %>% 
+  filter(fips %in% cclist | typ_us$fips == 51195 | typ_us$fips == 51720)
+
+```
+
+# Clustering Analysis
+
+```{r}
+# Clustering on 251 coal counties claiming analysed in regression section
+cluster_coal <- typ_coal[,c("fips","RUC_2013","POPESTIMATE2019", 
+                            "ed_over_25_bachelor_or_higher", "med_earnings",
+                            "lfpr_20_64_female", "diversity_index")]
+
+cluster_coal2 <- data.frame(cluster_coal, row.names = 1)
+scaled_coalcluster <- scale(cluster_coal2)
+
+
+###############################################################################
+###############################################################################
+# SUPPLEMENTARY FIGURE S2: Elbow Method
+
+# Indicates optimal clusters between 2-4
+fviz_nbclust(scaled_coalcluster, hcut, method = "wss")+
+labs(title= NULL)
+ggsave("output/supp_fig_s2.jpg")
+###############################################################################
+###############################################################################
+
+
+###############################################################################
+###############################################################################
+# SUPPLEMENTARY FIGURE S3: Silhouette Method
+
+# Indicates optimal clusters 2
+fviz_nbclust(scaled_coalcluster, hcut, method = "silhouette")+
+labs(title= NULL)
+ggsave("output/supp_fig_s3.jpg")
+###############################################################################
+###############################################################################
+
+
+###############################################################################
+###############################################################################
+# SUPPLEMENTARY FIGURE S4: Gap Statistic
+# Indicates optimal clusters 1
+gap_stat <- clusGap(scaled_coalcluster, hcut, K.max = 10)
+fviz_gap_stat(gap_stat)+
+labs(title= NULL)
+ggsave("output/supp_fig_s4.jpg")
+###############################################################################
+###############################################################################
+
+res_k3 <- eclust(scaled_coalcluster, k = 3,  "hclust")
+
+res_k3$size
+fviz_cluster(res_k3, pointsize = .5, labelsize = NULL, show.clust.cent = TRUE)
+
+
+typ_coal <- data.frame(typ_coal, res_k3$cluster)
+names(typ_coal)[names(typ_coal) == "res_k3.cluster"] <- "cluster"
+
+ct_voting <- function(clust) {
+  n_clust = sum(with(typ_coal, typ_coal$cluster == clust))
+  p_16 = sum(with(typ_coal, party_16 == "REPUBLICAN" & typ_coal$cluster == clust))
+  p_20 =sum(with(typ_coal, party == "REPUBLICAN" & typ_coal$cluster == clust))
+  if(p_16 == p_20) {return(p_16)}else{return(as.list[p_16,p_20])}
+}
+
+###############################################################################
+###############################################################################
+# SUPPLEMENTARY TABLE S23
+# Create table of cluster characteristics
+cc_output <- as.data.frame(aggregate(cluster_coal2, by=list(cluster=res_k3$cluster), mean))
+cc_output <- cbind(cc_output, res_k3$size)
+cc_output <- as.data.frame(t(cc_output))
+cc_output <- cc_output[, c(2, 1, 3)]
+colnames(cc_output) = c("Type 1", "Type 2", "Type 3")
+cc_output <- rbind(cc_output, c(ct_voting(2), ct_voting(1), ct_voting(3)))
+typ_us$party[which(typ_us$fips == "06077")] = "DEMOCRAT"
+us_avg <- t(summarize(typ_us, cluster = "us_total", mean(RUC_2013),mean(POPESTIMATE2019),mean(ed_over_25_bachelor_or_higher), mean(med_earnings), mean(lfpr_20_64_female), mean(diversity_index, na.rm = TRUE), nrow(typ_us), sum(party == "REPUBLICAN")))
+cc_output <- cbind(cc_output, us_avg)
+
+# NOTE THAT FIVE VIRGINIA COUNTIES ARE MISSING FROM THIS GROUP
+typ_us$fips[which(is.na(typ_us$diversity_index))]
+cc_output1 <- cc_output[-1,]
+cc_output1 %>% kable(type = "latex")
+###############################################################################
+###############################################################################
+
+cluster_coal <- typ_coal[,c("fips","RUC_2013","POPESTIMATE2019", 
+                            "ed_over_25_bachelor_or_higher", "med_earnings",
+                            "lfpr_20_64_female", "diversity_index", "party", "party_16")]
+
+cluster_coal$party_20_bin <- ifelse(cluster_coal$party == "REPUBLICAN", 1, 0)
+cluster_coal$party_16_bin <- ifelse(cluster_coal$party_16 == "REPUBLICAN", 1, 0)
+
+
+###############################################################################
+###############################################################################
+### SUPPLEMENTARY TABLE S7
+stargazer(as.data.frame(cluster_coal[,c("RUC_2013","POPESTIMATE2019", 
+                            "ed_over_25_bachelor_or_higher", "med_earnings",
+                            "lfpr_20_64_female", "diversity_index", "party_20_bin", "party_16_bin")]), digits = 1, type = "text",
+          covariate.labels=c("2013 Rural-Urban Code","Population Size",
+                             "Educational Attainment: Bachelor's Degree or Higher %; aged 25-64",
+                             "Median Earnings USD","Female Labour Force Participation %; aged 25-64",
+                             "Chmura Diversity Index", "Voted for the Republican Party in the 2020 Election", "Voted for the Republican Party in the 2020 Election"), notes = "* The number of coal counties included in the typology (252) differs from the number identified in the econometric analysis (251) because Wise County, Virginia and Norton City, Virginia  are considered separately by the various entities reporting data for the typology characteristics. They are combined into one county area by the Bureau of Economic Analysis whose method was used as the standard used for the econometric analysis.")
+###############################################################################
+###############################################################################
+
+```
+
+
+# Radar Plot
+```{r}
+
+mins <- cluster_coal[,2:7] %>% summarise_all(min) %>% append(., 1) %>% as.data.frame  %>% `rownames<-`("min")
+maxs <- cluster_coal[,2:7] %>% summarise_all(max)  %>% append(., 0) %>% as.data.frame %>% `rownames<-`("max")
+names(mins) <-  c(names(mins[-7]),"rep_pct")
+names(maxs) <-  c(names(maxs[-7]),"rep_pct")
+
+cc_radar <- cc_output1 %>%  t %>% as.data.frame %>% mutate(rep_pct = as.numeric(`9`)/as.numeric(`res_k3$size`)) %>%  select(RUC_2013, POPESTIMATE2019, ed_over_25_bachelor_or_higher, med_earnings, lfpr_20_64_female, diversity_index, rep_pct) %>% rbind(maxs, mins, .)
+
+
+cc_radar$RUC_2013[which(rownames(cc_radar) == "max")] = 1
+cc_radar$RUC_2013[which(rownames(cc_radar) == "min")] = 9
+
+cc_radar$diversity_index[which(rownames(cc_radar) == "max")] = min(cluster_coal$diversity_index)
+cc_radar$diversity_index[which(rownames(cc_radar) == "min")] = max(cluster_coal$diversity_index)
+
+cc_radar <- cc_radar %>% mutate(across(everything(.), as.numeric))
+
+jpeg("output/figure_4.jpg", width = 1024, height = 768)
+par(xpd = TRUE, mar = c(2, 1, 2, 1))
+radarchart(cc_radar, 
+           vlabels = c("Urban",
+                                     "Population     \n Size     ",
+                                     "Educational             \nAttainment             ",
+                                     "Median\nEarnings",
+                                     "     Female\n     LFPR",
+                                     "          Economic\n          Diversity",
+           "Democrat"), 
+           pcol = c(viridis(3), "grey40"), pty = c(16,16,16,20), vlcex = 2, plty = c(1,1,1,5), plwd = c(5,5,5,3), cglcol = "gray10")
+
+
+legend(
+  x = "bottom", legend = c("    Type 1\n(50 counties)", 
+                           "      Type 2\n(160 counties)", 
+                           "     Type 3\n(42 counties)", 
+                           "  US Average\n(3,107 counties)"), horiz = TRUE,
+  bty = "n", pch = 20, col = c(viridis(3), "grey40"),
+  text.col = "black", cex = 1, pt.cex = 2, inset = c(0,0), xpd = TRUE, 
+  )
+dev.off()
+
+```
+
+
+# Create df with clusters for regressions
+Creates cc_clusters_251.xlsx called in main_econometrics.Rmd
+```{r}
+cc_cluster <- typ_coal[c("fips", "cluster")]
+cc_cluster$type[which(cc_cluster$cluster == 1)] = 2
+cc_cluster$type[which(cc_cluster$cluster == 2)] = 1
+cc_cluster$type[which(cc_cluster$cluster == 3)] = 3
+
+cc_cluster$fips[which(cc_cluster$fips == "51195" | cc_cluster$fips == "51720")] <- "51955"
+cc_cluster <- cc_cluster[!duplicated(cc_cluster$fips),]
+
+# writexl::write_xlsx(cc_cluster, here("data/cc_clusters_251.xlsx"))
+```
+
+# County Type Map
+```{r}
+
+library(sf)
+require(sf)
+library(viridis)
+coalfields <- read_sf(dsn = "data/CoalFieldsUS", layer = "CoalFieldsUS")
+coalfields <- subset(coalfields, PROVINCE != "Alaska")
+counties <- read_sf(dsn = "data/CoalFieldsUS", layer = "cb_2018_us_county_20m")
+counties <- subset(counties, STATEFP != "02" & STATEFP != "15" & STATEFP != "72")
+
+
+shp_mine <- cc_cluster[,c("fips", "type")]
+shp_mine <- subset(rbind(shp_mine, c("51720", 2), c("51195", 2)), fips != "51955")
+
+
+names(shp_mine)[names(shp_mine) == "fips"] <- "GEOID"
+
+counties_test <- merge(counties, shp_mine, by = "GEOID", all.x = TRUE)
+mines_layer <- subset(counties_test, !is.na(type))
+counties_test$type <- as.factor(counties_test$type)
+
+ggplot() + 
+  geom_sf(data = coalfields, colour = NA, fill = alpha("lightsteelblue", 0.5), size = 1) +
+  geom_sf(data = counties_test, colour = "grey", size = 0.04, mapping = aes(fill = type)) +
+  geom_sf(fill = "transparent", color = "grey50", size = 0.2, 
+           data = counties_test %>% summarise()) +
+   #scale_fill_continuous(name = "Active Mines", na.value = "white") + 
+  scale_fill_viridis_d(name = "County Type", labels = c("Type 1", "Type 2", "Type 3", "No active mines 2002-2019"), na.value = alpha("grey",0.2))+
+  theme(panel.background = element_rect(color = "white", fill = "white"),
+          plot.title = element_text(face = "bold"), legend.background=element_blank(), legend.position = "bottom")+
+  coord_sf(datum = NA)
+
+ggsave("output/figure_5.jpg", width = 12, height = 8)
+
+```
+

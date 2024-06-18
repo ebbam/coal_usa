@@ -1,0 +1,1135 @@
+---
+title: "robustness_checks"
+author: "Ebba Mark"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Overview
+
+The following script conducts the main typology analysis reported in the manuscript.
+
+The script produces the results reported in:
+ - Supplementary Tables ...
+ - Supplementary Figures ...
+
+The script draws on the following scripts and data sources:
+Data Sources:
+ - data/Econometrics_Final.xlsx: input data to econometric analysis
+ - data/Typology_Final.xlsx: input data to typology clustering analysis
+ - data/CoalFieldsUS/: all relevant shape files in CoalFieldsUS to outline US coal fields on Figure 5
+ 
+Scripts:
+- code/dicts.R: provides fixest and other dictionaries for regression output and summary statistics tables
+- code/useful_functions.R: includes various functions called throughout the script. Mainly these are functions that make certain regression output compatible with summary table functions and coefficient plot functions. This also outlines the Louisiana counties that have missing values in our main dataset to ensure that these are excluded in the spatial neighbor matrix generated in main_econometrics.Rmd
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Libraries
+```{r cars}
+
+library(tidyverse)
+library(readxl)
+library(here)
+library(openxlsx)
+library(gdata)
+library(janitor)
+library(tidycensus)
+library(zoo)
+library(splm)
+library(spdep)
+library(multcomp)
+library(modelsummary)
+library(stargazer)
+library(kableExtra)
+library(conflicted)
+library(fixest)
+library(plm)
+library(zoo)
+conflict_prefer_all("dplyr", quiet = TRUE)
+setwd(here("replication_code"))
+
+```
+
+# Data
+
+```{r}
+
+# Production and productive capacity data cleaned in prod_cap_cleaning.R
+# This dataset contains all variables from Econometrics_Final.xlsx with additional production and productive capacity data as cleaned in prod_cap_cleaning.R
+allcomp <- readRDS("data/production_capacity/allcomp_cap_prod.RDS")
+
+```
+
+
+```{r cars}
+# Unmodified lookup table to adjust FIPS codes between various standards
+bea_fips_mods <- read_excel("data/FIPSModificationsVA.xlsx", skip = 1, col_types = c("text", "text","text","text"))
+
+# Create subset of coal counties (CC) only (with active mines at some point)
+cclist <- unique(allcomp$fips[which(allcomp$active_mines != 0)])
+allcomp_cc <- subset(allcomp, fips %in% cclist)
+
+# Dataset including the "type" of county as found in the Typology work (Typology Work_New.Rmd)
+# Merged with CC dataset
+cc_cluster <- read_excel("data/cc_clusters_251.xlsx")
+allcomp_cc_types <- merge(allcomp_cc, cc_cluster, by = "fips", all.x = TRUE)
+
+# Load required functions and dictionaries
+source("code/useful_functions.R")
+source("code/dicts.R")
+
+# Create adjacency matrix for spatial model
+##############################################################
+# Import adjacency matrix from US Census Bureau: 
+# https://www.census.gov/programs-surveys/geography/library/reference/county-adjacency-file.html
+xmat1 <- read.csv("data/county_adjacency.txt", sep="\t", stringsAsFactors = FALSE, header = FALSE)
+
+# Retain only columns with FIPS codes of each county (V2) and its neighbors (V4)
+xmat1 <- xmat1[,c("V2","V4")]
+
+# Replace NA values in V2 such that each row is a pair of neighbors
+xmat1$V2 <- na.locf(xmat1$V2)
+
+# Convert from integer to character fips code for appropriate matching
+xmat1$V2 <- lapply(xmat1$V2, function(x) sapply(x, fips_format))
+xmat1$V4 <- lapply(xmat1$V4, function(x) sapply(x, fips_format))
+
+# Create lookup table to convert VA FIPS codes
+getfips <- bea_fips_mods$`BEA FIPS`
+names(getfips) <- bea_fips_mods$FIPS
+
+xmat1[xmat1 == "46113"] <- "46102"
+xmat1[xmat1 == "51515"] <- "51019"
+xmat1$V2 <- lapply(xmat1$V2, function(x) ifelse(x %in% bea_fips_mods$FIPS, getfips[x], x))
+xmat1$V4 <- lapply(xmat1$V4, function(x) ifelse(x %in% bea_fips_mods$FIPS, getfips[x], x))
+
+# Removes Alaska, Hawaii, DC, PR, Guam, American Samoa
+xmat1 <- subset(xmat1, substr(V2, 1, 2) != "60" & 
+                  substr(V2, 1, 2) != "66" &
+                  substr(V2, 1, 2) != "69" &
+                  substr(V2, 1, 2) != "72" &
+                  substr(V2, 1, 2) != "78" &
+                  substr(V2, 1, 2) != "15" &
+                  substr(V2, 1, 2) != "02")
+
+LA_list <- c(LA_list_missing, "11001")
+xmat1 <- subset(xmat1, !(V2 %in% LA_list) & !(V4 %in% LA_list))
+
+length(unique(xmat1$V2))
+
+# Unnest list elements for easier manipulation
+xmat1 <- unnest(xmat1)
+# Create a list of each unique FIPS code for matching
+fipslist <- unique(xmat1$V2)
+
+# Subset dataframe to only include FIPS present in the distance matrix
+allcomp_nomissing <- subset(allcomp, fips %in% fipslist)
+#allcomp_nomissing <- subset(allcomp_nomissing, fips != "51770")
+allcomp_full <- allcomp_nomissing %>%
+  arrange(fips) %>%
+  select(fips,year,everything())
+
+xmatfips <- unique(xmat1$V2)
+
+# Create an empty (all cells = 0) n x n distance matrix with n = no of FIPS codes/counties
+fmat <- matrix(data=0, nrow = length(xmatfips), ncol = length(xmatfips), dimnames = list(xmatfips,xmatfips))
+
+# Iterate through xmatfips, populating matrix with 1 if two counties are neighbors
+# Census bureau lists counties as neighbors of itself so the loop will fill cell 
+# with 0 for row-pair that lists a county as a neighbor of itself
+for(i in 1:nrow(xmat1)){
+  a = as.character(xmat1$V2[i])
+  b = as.character(xmat1$V4[i])
+  if(identical(a,b)){fmat[a,b] <- 0}else{fmat[a,b] <- 1}
+}
+
+# Row standardises the distance matrix
+fmat <- fmat/rowSums(fmat)
+sum(is.na(fmat))
+dim(fmat)
+
+# Creates listw object for use in splm package
+fmatlw <- mat2listw(fmat, style = "W")
+
+# Also a test for errors
+testfmatcdg <- listw2dgCMatrix(fmatlw)
+
+# Sanity checks
+### Ensure panel is balanced
+is.pbalanced(allcomp_full)
+### No NAs
+sum(is.na(fmatlw))
+```
+
+
+## Heterogeneity in Mine Size: Production and Capacity
+
+```{r cars}
+
+FE_diffuer <- as.formula("diff_uer ~ mines_diff + lag_diff + lag_diff2 + diff_log_realgdp_pc | fips + year")
+FE_prod_orig <- as.formula("diff_uer ~ prod_diff + lag_prod_diff + lag_prod_diff2 + diff_log_realgdp_pc | fips + year")
+FE_prod_cap2 <- as.formula("diff_uer ~ diff_prod_cap2 + l1_diff_prod_cap2 + l2_diff_prod_cap2 + diff_log_realgdp_pc | fips + year")
+
+main <- feols(FE_diffuer, allcomp, se = 'twoway')
+main_prod_orig <- feols(FE_prod_orig, allcomp, se = 'twoway')
+main_cap2 <- feols(FE_prod_cap2, allcomp, se = 'twoway')
+modelsummary(list(main, main_prod_orig, main_cap2), stars = TRUE)
+
+allcomp_full$diff_log_realgdp_pc[which(allcomp_full$fips == "08014" & allcomp_full$year == 2002)] <- 0
+allcomp_full$diff_log_realgdp[which(allcomp_full$fips == "08014" & allcomp_full$year == 2002)] <- 0
+allcomp_full$diff_log_pop[which(allcomp_full$fips == "08014" & allcomp_full$year == 2002)] <- 0
+
+fmdiff_prod <- diff_uer ~ prod_diff + lag_prod_diff + lag_prod_diff2 + diff_log_realgdp_pc
+fmdiff_prodcap2 <- diff_uer ~ diff_prod_cap2 + l1_diff_prod_cap2 + l2_diff_prod_cap2 + diff_log_realgdp_pc
+
+sp_err_lag_prod <- spml(fmdiff_prod, data = allcomp_full, index = NULL,  listw = fmatlw, 
+                         lag = TRUE, na.action = na.fail, spatial.error = "b",
+                         model = "within", effect = "twoways", quiet = FALSE)
+
+sp_err_lag_cap2 <- spml(fmdiff_prodcap2, data = allcomp_full, index = NULL,  listw = fmatlw, 
+                       lag = TRUE, na.action = na.fail, spatial.error = "b",
+                       model = "within", effect = "twoways", quiet = FALSE)
+
+allcomp_pdf <- pdata.frame(allcomp_full, index = c("fips", "year"))
+allcomp_pdf$sl_prod_diff <- slag(allcomp_pdf$prod_diff, fmatlw)
+allcomp_pdf$sl_lag_prod_diff <- slag(allcomp_pdf$lag_prod_diff, fmatlw)
+allcomp_pdf$sl_lag_prod_diff2 <- slag(allcomp_pdf$lag_prod_diff2, fmatlw)
+
+allcomp_pdf$sl_diff_prod_cap2 <- slag(allcomp_pdf$diff_prod_cap2, fmatlw)
+allcomp_pdf$sl_l1_diff_prod_cap2 <- slag(allcomp_pdf$l1_diff_prod_cap2, fmatlw)
+allcomp_pdf$sl_l2_diff_prod_cap2 <- slag(allcomp_pdf$l2_diff_prod_cap2, fmatlw)
+
+fmdiff_prod_spl <-  diff_uer ~ prod_diff + lag_prod_diff + lag_prod_diff2 + diff_log_realgdp_pc + sl_prod_diff + sl_lag_prod_diff + sl_lag_prod_diff2
+fmdiff_cap2_spl2 <-  diff_uer ~ diff_prod_cap2 + l1_diff_prod_cap2 + l2_diff_prod_cap2 + diff_log_realgdp_pc + sl_diff_prod_cap2 + sl_l1_diff_prod_cap2 + sl_l2_diff_prod_cap2
+
+# run model
+durbin_error_prod <- spml(fmdiff_prod_spl, data = allcomp_pdf, listw = fmatlw, model="within", effect = "twoways", quiet = FALSE, spatial.error = "b")
+summary(durbin_error_prod)
+
+durbin_error_cap2 <- spml(fmdiff_cap2_spl2, data = allcomp_pdf, listw = fmatlw, model="within", effect = "twoways", quiet = FALSE, spatial.error = "b")
+summary(durbin_error_cap2)
+
+sparse.W <- listw2dgCMatrix(fmatlw)
+time <- length(unique(allcomp_full$year))
+s.lwcounties <- kronecker(Matrix::Diagonal(time), sparse.W)
+trMatc <- spatialreg::trW(s.lwcounties, type="mult")
+imperrlag_prod <- impacts(sp_err_lag_prod, tr = trMatc, R = 200)
+imperrlag_cap2 <- impacts(sp_err_lag_cap2, tr = trMatc, R = 200)
+
+names_prod <- c("Production_{i,t}", "Production_{i,t-1}", "Production_{i,t-2}", "(log) Real GDPPC")
+names_cap2 <- c("Capacity*_{i,t}", "Capacity*_{i,t-1}", "Capacity*_{i,t-2}", "(log) Real GDPPC")
+names_durbin_prod <- c("Production_{i,t}", "Production_{i,t-1}", "Production_{i,t-2}", "(log) Real GDPPC", "Production_{-i,t}", "Production_{-i,t-1}", "Production_{-i,t-2}")
+names_durbin_cap2 <- c("Capacity*_{i,t}", "Capacity*_{i,t-1}", "Capacity*_{i,t-2}", "(log) Real GDPPC", "Capacity*_{-i,t}", "Capacity*_{-i,t-1}", "Capacity*_{-i,t-2}")
+
+
+# SARAR Results
+sarar_tbl <-cbind(spat_output_rob(imperrlag_prod), 
+                    spat_output_rob(imperrlag_cap2))
+
+
+###############################################################################
+###############################################################################
+#### SUPPLEMENTARY TABLE S33
+sarar_tbl[1:5] %>% 
+  tibble %>% 
+  mutate(var = case_when(var == "prod_diff" ~ "Production_{i,t}",
+                         var == "lag_prod_diff" ~ "Production_{i,t-1}",
+                         var == "lag_prod_diff2" ~ "Production_{i,t-2}",
+                         var == "diff_log_realgdp_pc" ~ "(log) Real GDPPC")) %>% 
+  left_join(sum_tbl(durbin_error_prod, names_durbin_prod, TRUE), ., by = c("var", "measure")) %>% 
+  left_join(., sum_tbl(main_prod_orig, names_prod, FALSE), by = c("var", "measure")) %>% 
+  relocate(var, measure, estimate.y, estimate.x, Direct, Indirect, Total) %>% 
+  mutate(var = ifelse(row_number()%%2, var, "")) %>% 
+  select(-measure) %>% 
+  kable(., booktabs=TRUE, format = "latex") %>% 
+  kable_styling(position="center")
+
+###############################################################################
+###############################################################################
+
+
+###############################################################################
+###############################################################################
+#### SUPPLEMENTARY TABLE S34
+sarar_tbl[6:10] %>% 
+  tibble %>% 
+  mutate(var = case_when(var == "diff_prod_cap2" ~ "Capacity*_{i,t}",
+                         var == "l1_diff_prod_cap2" ~ "Capacity*_{i,t-1}",
+                         var == "l2_diff_prod_cap2" ~ "Capacity*_{i,t-2}",
+                         var == "diff_log_realgdp_pc" ~ "(log) Real GDPPC")) %>% 
+  left_join(sum_tbl(durbin_error_cap2, names_durbin_cap2, TRUE), ., by = c("var", "measure")) %>% 
+  left_join(sum_tbl(main_cap2, names_cap2, FALSE), by = c("var", "measure")) %>% 
+  relocate(var, measure, estimate.y, estimate.x, Direct, Indirect, Total) %>% 
+  mutate(var = ifelse(row_number()%%2, var, "")) %>% 
+  select(-measure) %>% 
+  kable(., booktabs=TRUE, format = "latex") %>% 
+  kable_styling(position="center")
+
+###############################################################################
+###############################################################################
+
+```
+
+
+
+## Underground versus Surface Coal Mines
+
+```{r cars}
+
+FE_diffuer <- as.formula("diff_uer ~ mines_diff + lag_diff + lag_diff2 + diff_log_realgdp_pc | fips + year")
+FE_diff_surface <- as.formula("diff_uer ~ diff_surface_active_n + l1_diff_surface_active_n + l2_diff_surface_active_n + diff_log_realgdp_pc | fips + year")
+FE_diff_underground <-as.formula("diff_uer ~ diff_underground_active_n + l1_diff_underground_active_n + l2_diff_underground_active_n + diff_log_realgdp_pc | fips + year")
+
+main <- feols(FE_diffuer, allcomp, se = 'twoway')
+main_surface <- feols(FE_diff_surface, allcomp, se = 'twoway')
+main_underground <- feols(FE_diff_underground, allcomp, se = 'twoway')
+modelsummary(list(main, main_surface, main_underground), stars = TRUE)
+  
+############ SPATIAL ########
+allcomp_full$diff_log_realgdp_pc[which(allcomp_full$fips == "08014" & allcomp_full$year == 2002)] <- 0
+allcomp_full$diff_log_realgdp[which(allcomp_full$fips == "08014" & allcomp_full$year == 2002)] <- 0
+allcomp_full$diff_log_pop[which(allcomp_full$fips == "08014" & allcomp_full$year == 2002)] <- 0
+
+
+fmdiff_surface <- diff_uer ~ diff_surface_active_n + l1_diff_surface_active_n + l2_diff_surface_active_n + diff_log_realgdp_pc
+fmdiff_underground <- diff_uer ~ diff_underground_active_n + l1_diff_underground_active_n + l2_diff_underground_active_n + diff_log_realgdp_pc
+
+sp_err_lag_surface <- spml(fmdiff_surface, data = allcomp_full, index = NULL,  listw = fmatlw, 
+                        lag = TRUE, na.action = na.fail, spatial.error = "b",
+                        model = "within", effect = "twoways", quiet = FALSE)
+
+sp_err_lag_underground <- spml(fmdiff_underground, data = allcomp_full, index = NULL,  listw = fmatlw, 
+                       lag = TRUE, na.action = na.fail, spatial.error = "b",
+                       model = "within", effect = "twoways", quiet = FALSE)
+
+allcomp_pdf$sl_diff_surface_active_n <- slag(allcomp_pdf$diff_surface_active_n, fmatlw)
+allcomp_pdf$sl_l1_diff_surface_active_n <- slag(allcomp_pdf$l1_diff_surface_active_n, fmatlw)
+allcomp_pdf$sl_l2_diff_surface_active_n <- slag(allcomp_pdf$l2_diff_surface_active_n, fmatlw)
+
+allcomp_pdf$sl_diff_underground_active_n <- slag(allcomp_pdf$diff_underground_active_n, fmatlw)
+allcomp_pdf$sl_l1_diff_underground_active_n <- slag(allcomp_pdf$l1_diff_underground_active_n, fmatlw)
+allcomp_pdf$sl_l2_diff_underground_active_n <- slag(allcomp_pdf$l2_diff_underground_active_n, fmatlw)
+
+fmdiff_surface_spl <-  diff_uer ~ diff_surface_active_n + l1_diff_surface_active_n + l2_diff_surface_active_n + diff_log_realgdp_pc + sl_diff_surface_active_n + sl_l1_diff_surface_active_n + sl_l2_diff_surface_active_n
+fmdiff_underground_spl <-  diff_uer ~ diff_underground_active_n + l1_diff_underground_active_n + l2_diff_underground_active_n + diff_log_realgdp_pc + sl_diff_underground_active_n + sl_l1_diff_underground_active_n + sl_l2_diff_underground_active_n
+
+
+# run model
+durbin_error_surface <- spml(fmdiff_surface_spl, data = allcomp_pdf, listw = fmatlw, model="within", effect = "twoways", quiet = FALSE, spatial.error = "b")
+summary(durbin_error_surface)
+
+durbin_error_underground <- spml(fmdiff_underground_spl, data = allcomp_pdf, listw = fmatlw, model="within", effect = "twoways", quiet = FALSE, spatial.error = "b")
+summary(durbin_error_underground)
+
+
+sparse.W <- listw2dgCMatrix(fmatlw)
+time <- length(unique(allcomp_full$year))
+s.lwcounties <- kronecker(Matrix::Diagonal(time), sparse.W)
+trMatc <- spatialreg::trW(s.lwcounties, type="mult")
+#implag <- impacts(sp_lag_prod, tr = trMatc, R = 200)
+imperrlag_surface <- impacts(sp_err_lag_surface, tr = trMatc, R = 200)
+imperrlag_underground <- impacts(sp_err_lag_underground, tr = trMatc, R = 200)
+
+
+summary(imperrlag_surface, zstats=TRUE, short=TRUE)
+summary(imperrlag_underground, zstats=TRUE, short=TRUE)
+
+summary(durbin_error_surface)
+summary(durbin_error_underground)
+
+
+names_surface <- c("Diff Active Surface Mines_{i,t}", "Diff Active Surface Mines_{i,t-1}", "Diff Active Surface Mines_{i,t-2}", "Diff (log) Real GDPPC")
+names_durbin_surface <- c("Diff Active Surface Mines_{i,t}", "Diff Active Surface Mines_{i,t-1}", "Diff Active Surface Mines_{i,t-2}", "Diff (log) Real GDPPC", "Diff Active Surface Mines_{-i,t}", "Diff Active Surface Mines_{-i,t-1}", "Diff Active Surface Mines_{-i,t-2}")
+names_underground <- c("Diff Active Underground Mines_{i,t}", "Diff Active Underground Mines_{i,t-1}", "Diff Active Underground Mines_{i,t-2}", "Diff (log) Real GDPPC")
+names_durbin_underground <- c("Diff Active Underground Mines_{i,t}", "Diff Active Underground Mines_{i,t-1}", "Diff Active Underground Mines_{i,t-2}", "Diff (log) Real GDPPC", "Diff Active Underground Mines_{-i,t}", "Diff Active Underground Mines_{-i,t-1}", "Diff Active Underground Mines_{-i,t-2}")
+
+
+###############################################################################
+###############################################################################
+#### SUPPLEMENTARY TABLE S31
+sarar_tbl <-cbind(spat_output_rob(imperrlag_surface), 
+                  spat_output_rob(imperrlag_underground))
+                  
+sarar_tbl[1:5] %>% 
+  tibble %>% 
+  mutate(var = case_when(var == "diff_surface_active_n" ~ "Diff Active Surface Mines_{i,t}",
+                         var == "l1_diff_surface_active_n" ~ "Diff Active Surface Mines_{i,t-1}",
+                         var == "l2_diff_surface_active_n" ~ "Diff Active Surface Mines_{i,t-2}",
+                         var == "diff_log_realgdp_pc" ~ "Diff (log) Real GDPPC")) %>% 
+  left_join(sum_tbl(durbin_error_surface, names_durbin_surface, TRUE), ., by = c("var", "measure")) %>% 
+  left_join(., sum_tbl(main_surface, names_surface, FALSE), by = c("var", "measure")) %>% 
+  relocate(var, measure, estimate.y, estimate.x, Direct, Indirect, Total) %>% 
+  mutate(var = ifelse(row_number()%%2, var, "")) %>% 
+  select(-measure) %>% 
+  kable(., booktabs=TRUE, format = "latex") %>% 
+  kable_styling(position="center")
+###############################################################################
+###############################################################################
+
+
+###############################################################################
+###############################################################################
+#### SUPPLEMENTARY TABLE S32
+sarar_tbl[6:10] %>% 
+  tibble %>% 
+  mutate(var = case_when(var == "diff_underground_active_n" ~ "Diff Active Underground Mines_{i,t}",
+                         var == "l1_diff_underground_active_n" ~ "Diff Active Underground Mines_{i,t-1}",
+                         var == "l2_diff_underground_active_n" ~ "Diff Active Underground Mines_{i,t-2}",
+                         var == "diff_log_realgdp_pc" ~ "Diff (log) Real GDPPC")) %>% 
+  left_join(sum_tbl(durbin_error_underground, names_durbin_underground, TRUE), ., by = c("var", "measure")) %>% 
+  left_join(., sum_tbl(main_underground, names_underground, FALSE), by = c("var", "measure")) %>% 
+  relocate(var, measure, estimate.y, estimate.x, Direct, Indirect, Total) %>% 
+  mutate(var = ifelse(row_number()%%2, var, "")) %>% 
+  select(-measure) %>% 
+  kable(., booktabs=TRUE, format = "latex") %>% 
+  kable_styling(position="center")
+###############################################################################
+###############################################################################
+
+```
+
+## Effect of Change in Active Mines on Sector-level Employment
+```{r}
+### Employment numbers #####
+# This data is pulled from QCEW: Source: https://www.bls.gov/cew/downloadable-data-files.htm.- CSVs Single Files: Annual Averages
+# Industry codes provided by QCEW BLS: https://www.bls.gov/cew/classifications/industry/industry-titles.htm
+
+# Each individual file is VERY large and therefore we have compiled this work separately into "qcew_compiled_raw_2000_2022.RDS" with the following code provided the data is downloaded and unzipped
+
+# df_list <- list()
+# for(y in 1990:2022){
+#   print(y)
+#   df_list[[as.character(y)]] <- read.csv(here(paste0(as.character(y), ".annual.singlefile.csv"))) %>%
+#     tibble %>%
+#     mutate(year = y) %>%
+#     left_join(., ind_codes, by = "industry_code") 
+# }
+
+#saveRDS(df_list, here("data/temp/qcew_compiled_raw_2000_2022.RDS"))
+
+ind_codes <- read_excel("data/industry-titles.xlsx")
+temp_test <- readRDS("data/qcew_compiled_raw_2000_2022.RDS")
+
+temp <- temp_test %>% 
+  filter(substr(area_fips, 3,5) != "000" & substr(area_fips, 3,5) != "999") %>%  
+  mutate(fips_state = substr(area_fips, 1,2)) %>% 
+  rename(fips = area_fips) %>% 
+  filter(!(fips_state %in% c("72","78", "C1", "C2", "C3", "C4", "CS"))) %>% 
+  mutate(fips = ifelse(fips %in% names(getfips), unname(getfips[fips]), fips)) %>% 
+  filter(!(fips %in% c("51560", "51515")) & !(fips == "46113" & year == 2015)) %>% 
+  mutate(fips = ifelse(fips == "46113", "46102", fips)) %>%
+  # Agglevel codes: https://www.bls.gov/cew/classifications/aggregation/agg-level-titles.htm  
+  #       only "total industry" has multiple agg level codes - 70 is the correct one for county totals
+  filter(!(industry_code == 10 & agglvl_code != 70)) %>% 
+  select(fips, year, industry_code, industry_title, annual_avg_estabs, annual_avg_emplvl, total_annual_wages, avg_annual_pay) %>% 
+  # Any counties that have multiple observations DO NOT HAVE A TOTAL "OWN-CODE = 0" or TOTAL GOVERNMENT "OWN-CODE = 8" record - therefore we group by fips, year, industry_code and sum total
+  group_by(fips, year, industry_code, industry_title) %>% 
+  summarise(across(c(annual_avg_estabs, annual_avg_emplvl, total_annual_wages, avg_annual_pay), ~sum(., na.rm = TRUE))) %>% 
+  ungroup 
+
+# There are 12 exceptions ot the above filtering of industrycode == 10 - 0 reported for total but there are lower level estimates. The below creates this supplement
+temp_supp <- temp_test %>% 
+  filter(substr(area_fips, 3,5) != "000" & substr(area_fips, 3,5) != "999") %>%  
+  mutate(fips_state = substr(area_fips, 1,2)) %>% 
+  rename(fips = area_fips) %>% 
+  filter(!(fips_state %in% c("72","78", "C1", "C2", "C3", "C4", "CS"))) %>% 
+  mutate(fips = ifelse(fips %in% names(getfips), unname(getfips[fips]), fips)) %>% 
+  filter(!(fips %in% c("51560", "51515")) & !(fips == "46113" & year == 2015)) %>% 
+  mutate(fips = ifelse(fips == "46113", "46102", fips)) %>%
+  # Agglevel codes: https://www.bls.gov/cew/classifications/aggregation/agg-level-titles.htm  
+  #       only "total industry" has multiple agg level codes - 70 is the correct one for county totals
+  group_by(fips, year) %>% 
+  filter(industry_code == "10" & any(agglvl_code == "70" & annual_avg_emplvl == 0) & fips %in% unique(allcomp$fips)) %>% 
+  ungroup %>% 
+  select(fips, year, industry_code, industry_title, annual_avg_estabs, annual_avg_emplvl, total_annual_wages, avg_annual_pay) %>% 
+  # Any counties that have multiple observations DO NOT HAVE A TOTAL "OWN-CODE = 0" or TOTAL GOVERNMENT "OWN-CODE = 8" record - therefore we group by fips, year, industry_code and sum total
+  group_by(fips, year, industry_code, industry_title) %>% 
+  summarise(across(c(annual_avg_estabs, annual_avg_emplvl, total_annual_wages, avg_annual_pay), ~sum(., na.rm = TRUE))) %>% 
+  ungroup
+
+emp_df <- temp %>% 
+  filter(!(industry_code == "10" & annual_avg_emplvl == 0)) %>% 
+  rbind(temp_supp) %>% 
+ # "42352" ~ Coal and other mineral and ore merchant wholesalers
+ # "213113" ~ Support activities for coal mining
+ # "2121" ~ Coal mining
+ # "221112" Fossil fuel electric power generation
+  filter(nchar(industry_code) <= 2 | industry_code %in% c("42352", "213113", "2121", "221112")) %>% 
+  select(fips, year, industry_code, annual_avg_emplvl) %>% 
+  mutate(nc = nchar(industry_code)) %>% 
+  arrange(nc) %>% 
+  select(-nc) %>% 
+  pivot_wider(id_cols = c("fips", "year"), names_from = industry_code, values_from = annual_avg_emplvl, names_prefix = "emp_") %>% 
+  mutate(across(where(is.numeric), ~ifelse(is.na(.), 0, .))) %>% 
+  mutate(emp_coal = emp_2121 + emp_213113,
+         emp_coal_sales = emp_coal + emp_42352,
+         emp_coal_ff_gen = emp_coal_sales + emp_221112,
+         emp_non_coal = emp_10 - emp_coal_sales) %>% 
+  select(-c(emp_42352, emp_213113, emp_2121, emp_221112, emp_99)) %>% 
+  complete(fips, year) %>% 
+  mutate(across(contains("emp"), ~./1000)) %>% 
+  mutate(across(contains("emp"), .fns = list(log = ~log(. + 1)), .names = "{.fn}_{.col}")) %>% 
+  group_by(fips) %>% 
+  mutate(across(contains("emp"), .fns = list(diff = ~c(NA,diff(.))), .names = "{.fn}_{.col}")) %>% 
+  ungroup %>% 
+  mutate(coal_share_emp = emp_coal/emp_10,
+         coal_sales_share_emp = emp_coal_sales/emp_10) %>% 
+  group_by(fips) %>% 
+  mutate(across(c(coal_share_emp, coal_sales_share_emp), .fns = list(l1 = ~lag(.x, 1), l2 = ~lag(.x, 2)), .names = "{.fn}_{.col}")) %>% 
+            ungroup
+
+is.pbalanced(emp_df)
+
+allcomp_final <- read_excel("data/Econometrics_Final.xlsx") %>% 
+  left_join(., emp_df, by = c("fips", "year"))
+
+# Also create a variable for the coal share of total employment
+deps <- emp_df %>% select(-c(fips, year)) %>% names 
+
+coal_emp_mods <- feols(.[deps[grepl("coal", deps)]] ~ mines_diff + lag_diff + lag_diff2 + diff_log_pop + diff_log_realgdp | fips + year, allcomp_emp, se = 'twoway')
+
+other_emp_mods <- feols(.[deps[!grepl("coal", deps)]] ~ mines_diff + lag_diff + lag_diff2 + diff_log_pop + diff_log_realgdp | fips + year, allcomp_emp, se = 'twoway')
+
+for(tt in list("emp_coal$", "emp_coal_sales", "emp_coal_ff_gen", "emp_non_coal")){
+  coal_emp_mods[lhs = tt] %>% etable(title = tt) %>% print
+}
+
+
+################################################################################
+# Controlling appropriately for population and log_realgdp
+# Also create a variable for the coal share of total employment
+
+deps <- emp_df %>% select(contains("diff_log_emp")) %>% names 
+
+coal_emp_mods <- feols(.[deps[grepl("coal", deps)]] ~ mines_diff + lag_diff + lag_diff2 + diff_log_pop + diff_log_realgdp | fips + year, allcomp_emp, se = 'twoway')
+
+other_emp_mods <- feols(.[deps[!grepl("coal", deps)]] ~ mines_diff + lag_diff + lag_diff2 + diff_log_pop + diff_log_realgdp | fips + year, allcomp_emp, se = 'twoway')
+
+
+###############################################################################
+###############################################################################
+#### SUPPLEMENTARY TABLE S39
+coal_emp_mods[lhs = c("diff_log_emp_coal", "diff_log_emp_coal_sales", "diff_log_emp_coal_ff_gen", "diff_log_emp_non_coal")] %>% etable(title = "Change in (log) Employment Levels", tex = TRUE) %>% print
+###############################################################################
+###############################################################################
+
+
+###############################################################################
+###############################################################################
+#### SUPPLEMENTARY TABLE S40
+other_emp_mods[lhs = c("diff_log_emp_10", "diff_log_emp_23", "diff_log_emp_72", "diff_log_emp_21", "diff_log_emp_55", "diff_log_emp_61")] %>% etable(title = "Change in (log) Employment Levels (Secondary Sectors)", tex = TRUE) %>% print
+###############################################################################
+###############################################################################
+
+```
+
+## Heterogeneity in Share of County-Level Employment in Coal Mining
+```{r}
+#### CONTROLLING FOR SHARE IN EMPLOYMENT ######
+temp_emp_interpol <- allcomp_emp %>% 
+  group_by(state.x, year) %>% 
+  mutate(lab_prod_state = sum(emp_coal, .na.rm = TRUE)/sum(active_mines, na.rm = TRUE)) %>% 
+  ungroup %>%
+  group_by(fips, year) %>%
+  mutate(lab_prod_county = emp_coal/active_mines) %>% 
+  #select(fips, year, emp_coal, active_mines, lab_prod_state, lab_prod_county) %>% 
+  group_by(fips) %>% 
+  mutate(lab_prod_county = ifelse(lab_prod_county == 0, NA, lab_prod_county),
+         lab_prod_county_interpol = na.approx(lab_prod_county, na.rm=FALSE), 
+         lab_prod_county_interpol = ifelse(is.infinite(lab_prod_county_interpol), NA, lab_prod_county_interpol),
+         lab_prod_county_mean = mean(lab_prod_county, na.rm = TRUE),
+         lab_prod_county_mean = ifelse(is.nan(lab_prod_county_mean) | is.infinite(lab_prod_county_mean), NA, lab_prod_county_mean)) %>% 
+  fill(lab_prod_county_interpol, .direction = "updown") %>% 
+  mutate(lab_prod_county_interpol = ifelse(is.na(lab_prod_county_interpol), lab_prod_state, lab_prod_county_interpol),
+         lab_prod_county_mean = ifelse(is.na(lab_prod_county_mean), lab_prod_state, lab_prod_county_mean)) %>% 
+  ungroup %>%
+  mutate(coal_share_emp_interpol = ifelse(coal_share_emp == 0, (active_mines*lab_prod_county_interpol)/emp_10, coal_share_emp),
+         coal_share_emp_mean = ifelse(coal_share_emp == 0, (active_mines*lab_prod_county_mean)/emp_10, coal_share_emp),
+         coal_share_emp_interpol = ifelse(is.na(coal_share_emp_interpol), 0, coal_share_emp_interpol),
+         coal_share_emp_mean = ifelse(is.na(coal_share_emp_mean), 0, coal_share_emp_mean),
+         across(c(coal_share_emp, coal_share_emp_interpol, coal_share_emp_mean), ~case_when(. <= 0.1 ~ "low",
+                                       . > 0.1 & . <= 0.2 ~ "medium",
+                                       . > 0.2 ~ "high"), .names = "{.col}_discrete"), 
+         across(contains("discrete"), ~factor(., levels = c("low", "medium", "high"))))
+
+FE_diffuer_main <- feols(diff_uer ~ mines_diff + lag_diff + lag_diff2 + diff_log_realgdp_pc | fips + year, allcomp_emp, se = "twoway")
+control_share_raw <- "diff_uer ~ mines_diff + lag_diff + lag_diff2 + diff_log_realgdp_pc + coal_share_emp | fips + year"
+share_forms <- list(control_share_raw,
+                    gsub("coal_share_emp", "coal_share_emp_interpol", control_share_raw),
+                    gsub("coal_share_emp", "coal_share_emp_mean", control_share_raw),
+                    "diff_uer ~ coal_share_emp_discrete*mines_diff + coal_share_emp_discrete*lag_diff + coal_share_emp_discrete*lag_diff2 + diff_log_realgdp_pc | fips + year",
+                    "diff_uer ~ coal_share_emp_interpol_discrete*mines_diff + coal_share_emp_interpol_discrete*lag_diff + coal_share_emp_interpol_discrete*lag_diff2 + diff_log_realgdp_pc | fips + year",
+                    "diff_uer ~ coal_share_emp_mean_discrete*mines_diff + coal_share_emp_mean_discrete*lag_diff + coal_share_emp_mean_discrete*lag_diff2 + diff_log_realgdp_pc | fips + year")
+
+
+share_results <- list(FE_diffuer_main)
+for(el in share_forms){
+  share_results <- c(share_results, list(feols(as.formula(el), data = temp_emp_interpol, se = "twoway")))
+}
+
+share_results[7]
+
+
+###############################################################################
+###############################################################################
+#### SUPPLEMENTARY TABLE S35
+
+# Orders by variable for coal share of employment used
+share_results[c(1,2,5,3,6,4,7)] %>% etable(tex = TRUE)
+###############################################################################
+###############################################################################
+
+#### Linear hypothesis tests
+
+glht_contemp <- list()
+contemp_tests <- c()
+glht_persistent <- list()
+persistence_tests <- c()
+for(k in share_results[c(1,2,5,3,6,4,7)]){
+  k$coefficients
+  glht_low <- glht(k, linfct = "mines_diff = 0")
+  # Contemporaneous tests
+  tests_med <- k$coefficients %>% purrr::keep(grepl("medium:mines_diff", names(.), fixed = TRUE)) %>% names
+  tests_high <- k$coefficients %>% purrr::keep(grepl("high:mines_diff", names(.), fixed = TRUE)) %>% names
+  if(length(tests_med) != 0 & length(tests_high) != 0){
+    hyp_test_contemp_med <- paste0("mines_diff + ", tests_med, " = 0")
+    glht_med <- glht(k, linfct = hyp_test_contemp_med)
+    hyp_test_contemp_high <- paste0("mines_diff + ", tests_high, " = 0")
+    glht_high <- glht(k, linfct = hyp_test_contemp_high)
+    glht_contemp <- c(glht_contemp, list(glht_low), list(glht_med), list(glht_high))
+    contemp_tests <- c(contemp_tests, hyp_test_contemp_med, hyp_test_contemp_high)
+  }else{
+    glht_contemp <- c(glht_contemp, list(glht_low))
+  }
+
+  # Persistence tests
+  glht_low <- glht(k, linfct = "mines_diff + lag_diff + lag_diff2 = 0")
+  tests_med <- k$coefficients %>% purrr::keep(grepl("medium:", names(.), fixed = TRUE)) %>% names
+  tests_high <- k$coefficients %>% purrr::keep(grepl("high:", names(.), fixed = TRUE)) %>% names
+  if(length(tests_med) != 0 & length(tests_high) != 0){
+    hyp_test_persistent_med <- paste0("mines_diff + ", paste0(tests_med, collapse = " + "), " = 0")
+    glht_med <- glht(k, linfct = hyp_test_persistent_med) %>% print
+    hyp_test_persistent_high <- paste0("mines_diff + lag_diff + lag_diff2 + ", paste0(tests_high, collapse = " + "), " = 0")
+    glht_high <- glht(k, linfct = hyp_test_persistent_high) %>% print
+    glht_persistent <- c(glht_persistent, list(glht_low), list(glht_med), list(glht_high))
+    persistence_tests <- c(persistence_tests, hyp_test_persistent_med, hyp_test_persistent_high)
+  }else{
+    glht_persistent <- c(glht_persistent, list(glht_low))
+  }
+}
+
+rename_fun <- function(name_list){
+  new <- lapply(name_list, function(x) gsub("discrete|interpol_|mean_", "", x)) %>% 
+    unlist
+  return(new)}
+
+
+options(modelsummary_format_numeric_latex = "plain")
+
+
+###############################################################################
+###############################################################################
+#### SUPPLEMENTARY TABLE S36
+glht_contemp %>% 
+  modelsummary(stars= TRUE, statistic = c("std.error", "p.value"), 
+               coef_rename = rename_fun, output = "latex")
+###############################################################################
+###############################################################################
+
+
+
+###############################################################################
+###############################################################################
+#### SUPPLEMENTARY TABLE S37
+glht_persistent %>% 
+  modelsummary(stars= TRUE, statistic = c("std.error", "p.value"), 
+               coef_rename = rename_fun, output = "latex")
+###############################################################################
+###############################################################################
+
+```
+
+
+
+## Calculation of Total Employment Losses
+```{r}
+
+#### Data
+allcomp_final <- allcomp_final %>% 
+    mutate(pos_lag_diff = ifelse(lag_diff >= 0, 1, 0),
+           pos_lag_diff2 = ifelse(lag_diff2 >= 0, 1, 0),
+           neg_lag_diff = ifelse(lag_diff < 0, 1, 0),
+           neg_lag_diff2 = ifelse(lag_diff2 < 0, 1, 0))
+
+FE_diffuer <- as.formula("diff_uer ~ mines_diff + lag_diff + lag_diff2 + diff_log_realgdp_pc | fips + year")
+model_mines <- feols(FE_diffuer, allcomp_final, se = "twoway")
+model_9_both = feols(diff_uer ~ neg_diff:mines_diff + neg_lag_diff:lag_diff + neg_lag_diff2:lag_diff2 + pos_diff:mines_diff + pos_lag_diff:lag_diff + pos_lag_diff2:lag_diff2 +  diff_log_realgdp_pc | fips + year, allcomp_final, se = 'twoway')
+
+### Absolute coal job loss numbers
+coef_all <- model_mines$coefficients[1]/100 %>% unname
+coef_neg <- model_9_both$coefficients['neg_diff:mines_diff']/100 %>% unname
+coef_pos <- model_9_both$coefficients['mines_diff:pos_diff']/100 %>% unname
+
+# Calculation of job loss estimates per county
+job_loss_ests <- allcomp_final %>% 
+  select(fips, year, mines_diff, employed, unemployed, labour_force, neg_diff, pos_diff) %>% 
+  mutate(ue_effect_neg = ifelse(sign(mines_diff) == -1, labour_force*coef_all*mines_diff, 0), 
+         ue_effect_pos = ifelse(sign(mines_diff) == 1, labour_force*coef_all*mines_diff, 0), 
+         asymm_effect_neg = ifelse(sign(mines_diff) == -1, labour_force*coef_neg*mines_diff, 0),
+         asymm_effect_pos = ifelse(sign(mines_diff) == 1, labour_force*coef_pos*mines_diff, 0),
+         ue_effect_net = ue_effect_neg + ue_effect_pos,
+         asymm_effect_net = asymm_effect_neg + asymm_effect_pos,
+         ue_effect_neg_single = ifelse(sign(mines_diff) == -1, labour_force*coef_all*sign(mines_diff), 0), 
+         ue_effect_pos_single = ifelse(sign(mines_diff) == 1, labour_force*coef_all, 0), 
+         asymm_effect_neg_single = ifelse(sign(mines_diff) == -1, labour_force*coef_neg*sign(mines_diff), 0),
+         asymm_effect_pos_single = ifelse(sign(mines_diff) == 1, labour_force*coef_pos, 0)) 
+
+
+
+
+###############################################################################
+###############################################################################
+#### SUPPLEMENTARY TABLE S45
+# Total job loss estimates on annual basis
+total_absolute %>% 
+  mutate(across(ue_effect_neg:asymm_effect_net, ~round(., digits = -2))) %>% 
+  kable(format = "latex")
+
+total_absolute %>% 
+  summarise(across(mines_diff:asymm_effect_net, ~round(sum(., na.rm = TRUE), digits = -2))) %>% 
+  kable(format = "latex")
+
+###############################################################################
+###############################################################################
+
+
+
+###############################################################################
+###############################################################################
+#### SUPPLEMENTARY FIGURE S7
+# Calculation of job loss estimates per county
+job_loss_ests %>% 
+  select(fips, ue_effect_neg, ue_effect_pos, asymm_effect_neg, asymm_effect_pos) %>% 
+  pivot_longer(!fips) %>% 
+  mutate(grouping = ifelse(grepl( "asymm", name), "Asymmetric Effect", "Absolute Effect"),
+         Key = case_when(name == "ue_effect_neg" ~ "Closure(s)", 
+                                name == "ue_effect_pos" ~ "Opening(s)", 
+                                name == "asymm_effect_neg" ~ "Closure(s) - Asymmetric Effect", 
+                                name == "asymm_effect_pos" ~ "Opening(s) - Asymmetric Effect"),
+         Key = factor(Key, levels = c("Closure(s)",  "Opening(s)", "Closure(s) - Asymmetric Effect", "Opening(s) - Asymmetric Effect"))) %>% 
+  filter(value != 0) %>% 
+  ggplot() +
+  geom_histogram(aes(x = value, fill = Key), bins = 100, alpha = 0.9) +
+  geom_vline(aes(xintercept = mean(value) + sd(value)), linetype = "dotted") +
+  geom_vline(aes(xintercept = mean(value) - sd(value)), linetype = "dotted") +
+  facet_wrap(~grouping, ncol = 1) +
+  theme_minimal() +
+  theme(legend.position = "bottom", legend.title = element_blank()) +
+  guides(fill = guide_legend(ncol = 2)) +
+  labs(x = "Change in Number of Persons Unemployed", y = "Number of Observations") +
+  scale_fill_brewer(palette = "Set1", direction = -1)
+
+ggsave("output/supp_fig_s7.jpg", width = 10, height = 7, units = "in")
+
+###############################################################################
+###############################################################################
+
+
+###############################################################################
+###############################################################################
+#### SUPPLEMENTARY FIGURE S6
+
+# Calculation of job loss estimates per county for a single mine closure
+job_loss_ests %>% 
+  select(fips, contains("single")) %>% 
+  pivot_longer(!fips) %>% 
+  mutate(grouping = ifelse(grepl( "asymm", name), "Asymmetric Effect", "Absolute Effect"),
+         Key = case_when(name == "ue_effect_neg_single" ~ "Single Closure",
+                         name == "ue_effect_pos_single" ~ "Single Opening",
+                         name == "asymm_effect_neg_single" ~ "Single Closure - Asymmetric Effect", 
+                         name == "asymm_effect_pos_single" ~ "Single Opening - Asymmetric Effect"),
+         Key = factor(Key, levels = c("Single Opening", "Single Closure",  "Single Opening - Asymmetric Effect", "Single Closure - Asymmetric Effect"))) %>% 
+  filter(value != 0) %>% 
+  ggplot() +
+  geom_histogram(aes(x = value, fill = Key), bins = 100) +
+  geom_vline(aes(xintercept = mean(value) + sd(value)), linetype = "dotted") +
+  geom_vline(aes(xintercept = mean(value) - sd(value)), linetype = "dotted") +
+  facet_wrap(~grouping, ncol = 1) +
+  theme_minimal() +
+  theme(legend.position = "bottom", legend.title = element_blank()) +
+  guides(fill = guide_legend(nrow = 1)) +
+  labs(x = "Change in Number of Persons Unemployed", y = "Number of Observations") + 
+  scale_fill_brewer(palette = "Set2")
+
+ggsave("output/supp_fig_s6.jpg", width = 10, height = 7, units = "in")
+###############################################################################
+###############################################################################
+
+
+summary_stats <- job_loss_ests %>% 
+  select(fips, contains("effect_")) %>% 
+  mutate(across(everything(), ~ifelse(. == 0, NA, .))) %>% 
+  mutate(across(contains("pos"), ~.*-1))
+
+###############################################################################
+###############################################################################
+#### SUPPLEMENTARY TABLE S46
+summary_stats %>% 
+  select(!contains("asymm") & !contains("net")) %>% 
+  data.frame %>% 
+  stargazer(type = "latex",
+            covariate.labels = c("Detected Effect of Closure(s)",
+                                 "Detected Effect of Opening(s)",
+                                 "Detected Effect of Single Closure",
+                                 "Detected Effect of Single Opening"),
+            title = "Detected Treatment Effects", digits = 0)
+
+###############################################################################
+###############################################################################
+
+###############################################################################
+###############################################################################
+#### SUPPLEMENTARY TABLE S47
+summary_stats %>% 
+    select(contains("asymm") & !contains("net")) %>% 
+    data.frame %>% 
+    stargazer(type = "latex",
+    covariate.labels = c("Detected Effect of Closure(s)",
+            "Detected Effect of Opening(s)",
+            "Detected Effect of Single Closure",
+            "Detected Effect of Single Opening"),
+            title = "Detected Treatment Effects using Asymmetric Treatment Coefficients", digits = 0)
+###############################################################################
+###############################################################################
+
+```
+
+
+## Linear Hypothesis Tests of Contemporaneous and Persistent Effects
+```{r}
+
+###############################################################################
+###############################################################################
+#### SUPPLEMENTARY TABLE S12
+
+for(sample in list(allcomp_cc, allcomp_final)){
+  model_mines <- feols(FE_diffuer, sample, se = 'twoway')
+  
+  model_neg= feols(diff_uer ~ mines_diff + neg_diff:mines_diff + 
+                     lag_diff + neg_lag_diff:lag_diff +
+                     lag_diff2 + neg_lag_diff2:lag_diff2 + 
+                     diff_log_realgdp_pc | 
+                     fips + year, sample, se = 'twoway')
+  
+  model_pos = feols(diff_uer ~ mines_diff + pos_diff:mines_diff + 
+                      lag_diff + pos_lag_diff:lag_diff + 
+                      lag_diff2 + pos_lag_diff2:lag_diff2 + 
+                      diff_log_realgdp_pc | 
+                      fips + year, sample, se = 'twoway')
+  
+  model_list <- list()
+  hyps <- data.frame()
+  for(k in c("mines", "neg", "pos")){
+    temp_mod <- eval(parse(text = paste0("model_", k)))
+    temp_names <- names(temp_mod$coefficients)[!(names(temp_mod$coefficients) == "diff_log_realgdp_pc")]
+    coef_ht = temp_names[!grepl("lag", temp_names)] %>% paste(., collapse = " + ") %>% paste(., " = 0") 
+    persistence_ht = temp_names %>% paste(., collapse = " + ") %>% paste(., " = 0") 
+    
+    coef_test = glht(temp_mod, linfct = coef_ht)
+    persistence_test = glht(temp_mod, linfct = persistence_ht)
+    print(coef_test)
+    print(persistence_test)
+    
+    model_list <- c(model_list, list(coef_test), list(persistence_test))
+    hyps <- rbind(hyps, 
+                  c("Contemporaneous Effect", coef_ht), 
+                  c("SE", NA),
+                  c("p-value", NA),
+                  c("Persistent Effect", persistence_ht),
+                  c("SE", NA),
+                  c("p-value", NA))
+  }
+  
+  rename_vector <- c("","","","","","") 
+  colnames(hyps) <- c("Test", "Null Hypothesis")
+  hyps <- hyps %>% 
+    mutate(test = gsub("mines_diff ", "Beta_{1} ", `Null Hypothesis`),
+           test = gsub(' lag_diff ', " Beta_{2} ", test),
+           test = gsub(' lag_diff2 ', " Beta_{3} ", test),
+           test = gsub("mines_diff:neg_diff", "Beta_{4}", test),
+           test = gsub("lag_diff:neg_lag_diff", "Beta_{5}", test),
+           test = gsub("lag_diff2:neg_lag_diff2", "Beta_{6}", test),
+           test = gsub("mines_diff:pos_diff", "Beta_{7}", test),
+           test = gsub("lag_diff:pos_lag_diff", "Beta_{8}", test),
+           test = gsub("lag_diff2:pos_lag_diff2", "Beta_{9}", test)) %>% 
+    select(-`Null Hypothesis`) %>% 
+    rename(`Null Hypothesis` = test)
+  attr(hyps, 'position') <- c(1, 2)
+  model_list %>% modelsummary(stars= TRUE, statistic = c("std.error", "p.value"), coef_rename =  rename_vector, add_columns = hyps, type = "latex") %>% print
+}
+
+
+###############################################################################
+###############################################################################
+
+
+```
+
+
+
+## Renewable Energy Investments: Evaluation the potential of the Inflation Reduction Act
+```{r}
+
+###############################################################################
+###############################################################################
+#### SUPPLEMENTARY TABLE S48
+
+ree_model_main = feols(diff_uer ~ mines_diff + lag_diff + lag_diff2 + mines_diff:REE_bin_top90 +
+                             lag_diff:l(REE_bin_top90,1) + lag_diff2:l(REE_bin_top90,2) +  REE_bin_top90 + l(REE_bin_top90,1) + l(REE_bin_top90,2) + diff_log_realgdp_pc | fips + year, allcomp, panel.id = ~fips+year,  se = 'twoway')
+
+ree_model_test = feols(diff_uer ~ mines_diff + lag_diff + lag_diff2 + mines_diff:REE_inv_scaled_realgdp +
+                             lag_diff:l(REE_inv_scaled_realgdp, 1) + lag_diff2:l(REE_inv_scaled_realgdp, 1) +  REE_inv_scaled_realgdp + l(REE_inv_scaled_realgdp, 1) + l(REE_inv_scaled_realgdp, 1) + diff_log_realgdp_pc | fips + year, test, panel.id = ~fips+year,  se = 'twoway')
+
+
+etable("REE Model Main" = ree_model_main,
+       "REE Model CC" = feols(diff_uer ~ mines_diff + lag_diff + lag_diff2 + mines_diff:REE_bin_top90 +
+                             lag_diff:l(REE_bin_top90,1) + lag_diff2:l(REE_bin_top90,2) +  REE_bin_top90 + l(REE_bin_top90,1) + l(REE_bin_top90,2) + diff_log_realgdp_pc | fips + year, allcomp_cc, panel.id = ~fips+year, se = 'twoway'), signifCode = c(`***` = 0.001, `**` = 0.01, `*` = 0.05, . = 0.1), tex = TRUE)
+
+###############################################################################
+###############################################################################
+
+###############################################################################
+###############################################################################
+#### SUPPLEMENTARY TABLE S49
+
+etable(feols(diff_uer ~ lag_diff2 + diff_log_realgdp_pc | fips + year, allcomp, panel.id = ~fips+year,se = 'twoway'),
+       feols(diff_uer ~ lag_diff2 + lag_diff2:l(REE_bin_top90, 1) + diff_log_realgdp_pc | fips + year, allcomp, panel.id = ~fips+year,se = 'twoway'),
+       feols(diff_uer ~ lag_diff2 + lag_diff2:l(REE_bin_top90, 2) + diff_log_realgdp_pc | fips + year, allcomp, panel.id = ~fips+year,se = 'twoway'),
+       feols(diff_uer ~ lag_diff2 + lag_diff2:l(REE_bin_top90, 2) + lag_diff2:l(REE_bin_top90, 1) + diff_log_realgdp_pc | fips + year, allcomp, panel.id = ~fips+year,se = 'twoway'), signifCode = c(`***` = 0.001, `**` = 0.01, `*` = 0.05, . = 0.1))
+
+###############################################################################
+###############################################################################
+
+```
+
+
+## PHTT: Replicate regressions incorporating REE interactions
+
+Run on principal regressions with binary mine closure indicator incorporating USDA REE investment interaction.
+
+Note: Interaction variables created above via static multiplication of REE binary closure, and lag of binary closure variables. This could potentially pose an issue with SE?
+
+```{r phtt with REE}
+
+# Incorporating interaction between REE investments and whether there was a 
+# mine closure in that year.
+library(phtt)
+
+allcomp <- allcomp %>% 
+  arrange(fips, year) %>%
+  group_by(fips) %>% mutate(lag_ree = lag(REE_bin_top90,1), 
+                            lag_ree2 = lag(REE_bin_top90, 2)) %>%
+  ungroup
+
+
+# Create matrices of relevant variables
+dep_diff_uer <- c_mat(allcomp$diff_uer)
+ind_mines_diff <- c_mat(allcomp$mines_diff)
+ind_lag_diff <- c_mat(allcomp$lag_diff)
+ind_lag_diff2 <- c_mat(allcomp$lag_diff2)
+ind_difflogrealgdppc <- c_mat(allcomp$diff_log_realgdp_pc)
+allcomp$intREE = allcomp$REE_bin_top90*allcomp$mines_diff
+allcomp$intREElag = allcomp$lag_ree*allcomp$lag_diff
+allcomp$intREElag2 = allcomp$lag_ree2*allcomp$lag_diff2
+
+test_REE_KSS <- KSS(dep_diff_uer ~  -1 + ind_mines_diff + ind_lag_diff + ind_lag_diff2 + c_mat(allcomp$REE_bin_top90) + c_mat(allcomp$lag_ree) + c_mat(allcomp$lag_ree2) + c_mat(allcomp$intREE) + c_mat(allcomp$intREElag) + c_mat(allcomp$intREElag2)+ 
+                    ind_difflogrealgdppc, 
+                    additive.effects = "twoways", factor.dim = 0)
+
+checkSpecif(test_REE_KSS, level = 0.001)
+# Rejects null of cross-sectional independence
+
+################################################################################
+################################################################################
+### SUPPLEMENTARY TABLE S50
+
+reebin1_KSS <- KSS(dep_diff_uer ~  -1 + ind_mines_diff + ind_lag_diff + ind_lag_diff2 + c_mat(allcomp$REE_bin_top90) + c_mat(allcomp$lag_ree) + c_mat(allcomp$lag_ree2) + c_mat(allcomp$intREE) + c_mat(allcomp$intREElag) + c_mat(allcomp$intREElag2)+ 
+                    ind_difflogrealgdppc, 
+                    additive.effects = "twoways", factor.dim = 1)
+
+summary(reebin1_KSS)
+
+reebin2_KSS <- KSS(dep_diff_uer ~  -1 + ind_mines_diff + ind_lag_diff + ind_lag_diff2 + c_mat(allcomp$REE_bin_top90) + c_mat(allcomp$lag_ree) + c_mat(allcomp$lag_ree2) + c_mat(allcomp$intREE) + c_mat(allcomp$intREElag) + c_mat(allcomp$intREElag2)+ 
+                    ind_difflogrealgdppc, 
+                    additive.effects = "twoways", factor.dim = 2)
+
+summary(reebin2_KSS)
+################################################################################
+################################################################################
+
+
+```
+
+
+## Panel Error Correction Models
+```{r}
+
+# using fixest ------------------------------------------------------------
+
+allcomp %>% 
+  select(year, fips, uer, active_mines, log_realgdp_pc) %>% 
+  mutate(uer_lag1 = lag(uer, 1),
+         uer_lag2 = lag(uer, 2),
+         mines_lag1 = lag(active_mines, 1),
+         mines_lag2 = lag(active_mines, 2),
+         duer = uer - lag(uer, 1),
+         dmines = active_mines - lag(active_mines, 1),
+         dgdp = log_realgdp_pc - lag(log_realgdp_pc, 1), 
+         .by = fips) %>% 
+  drop_na() -> panel_ecm_data
+
+# Estimate the ECM
+ecm_model <- feols(duer ~ uer_lag1 + dmines + mines_lag1 + mines_lag2 + dgdp | fips + year, data = panel_ecm_data)
+
+
+###############################################################################
+###############################################################################
+#### SUPPLEMENTARY TABLE S44
+# Display the model summary
+summary(ecm_model) %>% etable(tex = TRUE)
+
+###############################################################################
+###############################################################################
+
+'Coefficient Interpretations
+
+Lagged Dependent Variable (uer_lag1) Interpretation:
+
+The coefficient of uer_lag1 is -0.252678, which is highly significant (p-value < 2.2e-16).
+This negative coefficient indicates that approximately 25.27% of the deviation from the long-run equilibrium is corrected in each period. This suggests a fairly rapid adjustment towards equilibrium when there is a deviation.
+
+Differenced Independent Variable (dmines) Interpretation:
+
+The coefficient of dmines is -0.066292, which is highly significant (p-value = 4.8601e-14).
+This negative coefficient indicates that a one-unit increase in the change of mines (Δmines) leads to a 0.0663 unit decrease in the change of uer (Δuer) in the short run. Thus, increases in mines are associated with short-run decreases in uer.
+
+First Lag of Independent Variable (mines_lag1) Interpretation:
+
+The coefficient of mines_lag1 is -0.025017, which is significant (p-value = 3.9057e-04).
+This negative coefficient indicates that the first lag of mines has a negative long-run effect on uer. Specifically, a one-unit increase in mines from the previous period (t-1) is associated with a 0.025 unit decrease in uer in the current period.
+
+Second Lag of Independent Variable (mines_lag2) Interpretation:
+
+The coefficient of mines_lag2 is 0.031655, which is significant (p-value = 2.7527e-06).
+This positive coefficient indicates that the second lag of mines has a positive long-run effect on uer. Specifically, a one-unit increase in mines from two periods ago (t-2) is associated with a 0.032 unit increase in uer in the current period.
+
+
+Summary
+Speed of Adjustment: The uer_lag1 coefficient of -0.252678 indicates that about 25.27% of any deviation from the long-run equilibrium is corrected each period.
+Short-Run Dynamics:
+dmines: A negative and significant coefficient (-0.066292) suggests that increases in mines reduce uer in the short run.
+Long-Run Dynamics:
+mines_lag1: A significant negative coefficient (-0.025017) indicates a negative long-run effect of mines lagged by one period on uer.
+mines_lag2: A significant positive coefficient (0.031655) indicates a positive long-run effect of mines lagged by two periods on uer.
+
+
+
+Combined Interpretation
+Immediate Impact (Short-Run):
+
+dmines: The immediate effect of a change in mining activities is to reduce the unemployment rate. This could be due to the direct creation of jobs and increased economic activities resulting from new mining projects or expansions.
+Short-Term Lagged Effect:
+
+mines_lag1: The positive effects of mining activities persist into the next period, continuing to reduce the unemployment rate. This suggests that the benefits of job creation and economic activity do not dissipate immediately but last into the near future.
+Long-Term Lagged Effect:
+
+mines_lag2: After two periods, the impact of increased mining activity reverses, leading to an increase in the unemployment rate. This could be due to several reasons:
+Economic Adjustment: The initial boost from mining may lead to eventual layoffs or reduced hiring once initial projects are completed.
+Environmental and Social Costs: Over time, negative externalities such as environmental degradation or health impacts may become apparent, reducing the long-term sustainability of the initial economic benefits.
+Resource Depletion: Intensive mining activity might lead to resource depletion, which could negatively impact future mining prospects and related employment.
+Relevance and Implications
+Policy Implications:
+
+Short-Term Benefits: Policymakers might leverage mining activities to achieve immediate reductions in unemployment, especially in regions with high unemployment rates.
+Sustainability Concerns: Long-term planning must consider the potential adverse effects after the initial benefits fade. This includes addressing environmental concerns and ensuring that economic benefits are sustainable.
+Diversification Strategies: To mitigate long-term negative effects, strategies to diversify the local economy and reduce dependency on mining might be necessary.
+Economic Planning:
+
+Job Creation: Short-term policies could focus on maximizing job creation and economic activities associated with new mining projects.
+Long-Term Stability: Long-term economic policies should aim to address potential negative impacts and create a more balanced economic environment that does not solely rely on mining.
+Conclusion
+The coefficients for dmines, mines_lag1, and mines_lag2 provide a nuanced picture of how mining activities impact the unemployment rate over time. While mining activities have an immediate and short-term positive impact by reducing unemployment, there are potential negative long-term consequences that must be managed to ensure sustainable economic development.
+'
+
+
+# Pedroni Cointegration Test -----------------------------------------------------------------
+
+library(pco)
+
+new_ar <- array(dim = c(panel_ecm_data$year %>% unique %>% length,
+                        panel_ecm_data$fips %>% unique %>% length,
+                        5))
+vars_pco <- c("duer","dmines","mines_lag1","mines_lag2","dgdp")
+
+for(i in 1:length(vars_pco)){
+  # i = 1
+  panel_ecm_data %>% 
+    select(year, fips, all_of(vars_pco[i])) %>% 
+    arrange(year) %>% 
+    pivot_wider(values_from = all_of(vars_pco[i]), names_from = fips) %>% 
+    select(-year) %>% 
+    as.matrix() -> to_be_added
+  
+  new_ar[,,i] <- to_be_added
+}
+
+# This is the pedroni test for cointegration (Pedroni 1999)
+# these tests are described in Table 1 of the paper
+# Null is no cointegration - reject for cointegration
+
+# Mark and Sul in the paper use the "panel t-statistic" - this is probably tpanelpar    
+# but why they choose that one is unclear
+# we can plug the "standardised" column into a pnorm() and use the value for option "q"
+
+
+pedroni_result <- pedroni99m(new_ar)
+
+
+# see also Pedroni: 
+# Under the alternative hypothesis, the panel variance statistic
+# diverges to positive infinity, and consequently the right tail of the normal
+# distribution is used to reject the null hypothesis. Consequently, for the panel
+# variance statistic, large positive values imply that the null of no cointegration
+# is rejected. For each of the other six test statistics, these diverge to
+# negative infinity under the alternative hypothesis, and consequently the left
+# tail of the normal distribution is used to reject the null hypothesis. Thus, for
+# any of these latter tests, large negative values imply that the null of no
+# cointegration is rejected.
+
+# meaning: large positive values in tpanelvar --> reject null of no-cointegration
+# meaning: if you have negative values, then 
+
+# get the p-value of the test
+pnorm(pedroni_result$STATISTIC[4,2])
+
+# this is the only one we find evidence for cointegration for
+pnorm(pedroni_result$STATISTIC[4,1])
+
+###############################################################################
+###############################################################################
+#### SUPPLEMENTARY TABLE S43
+
+pedroni_result$STATISTIC[1:4,] %>% 
+  kableExtra::kable() %>%
+  kableExtra::kable_styling()
+###############################################################################
+###############################################################################
+
+
+
+```
+
