@@ -1,7 +1,7 @@
 # Replicating "Spatial-temporal dynamics of employment shocks in declining coal mining regions and potentialities of the 'just transition'"
-### Working paper currently available on arxiv: https://arxiv.org/abs/2211.12619
-### Authors: Ebba Mark, Ryan Rafaty, Moritz Schwarz
-### Repository Author: Ebba Mark
+## Working paper currently available on arxiv: https://arxiv.org/abs/2211.12619
+## Authors: Ebba Mark, Ryan Rafaty, Moritz Schwarz
+## Repository Author: Ebba Mark
 
 
 The following repository allows for the replication of "Spatial-temporal dynamics of employment shocks in declining coal mining regions and potentialities of the 'just transition'" - Mark, Rafaty, Schwarz. Currently available on arxiv: https://arxiv.org/abs/2211.12619
@@ -10,7 +10,7 @@ Although the repository includes additional files with various scoping work, it 
 
 The replication_code folder contains 3 folders:
 
-**code** containing 6 files:
+### **code** containing 6 files:
 **main_econometrics.Rmd**
 - Summary: Conducts the econometric results reported in the main text and a few robustness checks reported in the Supplementary Materials.
 - Input: Econometrics_Final.xlsx, FIPSModificationsVA.xlsx,cc_clusters_251.xlsx, county_adjacency.txt, useful_functions.R, dicts.R
@@ -40,7 +40,7 @@ in the Supplementary Materials of the main manuscript including analysis of mine
 - Input: Econometrics_Final.xls, calls annual data on coal production by mine either directly from the EIA via URL or, where necessary, from locally saved files where syntax errors make automatic file reading via url difficult. 
 - Output: allcomp_cap_prod.RDS
 
-**data** containing 7 files, 2 subfolders:
+### **data** containing 7 files, 2 subfolders:
 - Econometrics_Final.xlsx: input data to analysis in econometrics and robustness checks.
 - Typology_Final.xlsx: input data to clustering/typology analysis in main_typology.Rmd
 - cc_clusters_251.xlsx: lookup table for fips codes with identified county "types" in the clustering analysis.
@@ -51,4 +51,5 @@ in the Supplementary Materials of the main manuscript including analysis of mine
 - production_capacity/...: includes files used in prod_cap_cleaning.R as well as final compiled allcomp_cap_prod.RDS used for robustness checkes
 - qcew_compiled_raw_2000_2022.RDS: compiled sector-level employment numbers compiled from QCEW.
 
-**output** folder contains any figures used in the main text and supplementary materials of the manuscript labeled "figure_" or "supp_fig_", respectively.
+### **output** folder contains:
+Any figures used in the main text and supplementary materials of the manuscript labeled "figure_" or "supp_fig_", respectively.
