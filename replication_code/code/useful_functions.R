@@ -1,3 +1,10 @@
+## The following document includes various helper functions used to produce summary tables,
+# make fips codes coherent across data sources, and more
+
+# This script is called by main_econometrics.Rmd and robustness_checks.Rmd
+
+# Author: Ebba Mark
+
 ##############################################################
 ## Function to identify FIPS code
 

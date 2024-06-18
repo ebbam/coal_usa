@@ -1,5 +1,5 @@
 #### The following document is called by main_econometrics.Rmd and robustness_checks.Rmd
-#### 
+#### author: Ebba Mark
 #### Variable labels for latex output ####
 
 setFixest_dict(c(emp = "Persons Employed in Coal", employed = "Employed Persons",

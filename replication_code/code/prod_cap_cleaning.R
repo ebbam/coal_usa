@@ -1,5 +1,6 @@
 # The following script compiles the production and state productive capacity data and combiens with main econometrics input data
-# this dataset is called in the robustness_checks.Rmd scrip
+# this dataset is called in the robustness_checks.Rmd script
+# author: Ebba Mark
 
 # Libraries
 library(tidyverse)
@@ -22,7 +23,6 @@ conflict_prefer_all("dplyr", quiet = TRUE)
 setwd(here("replication_code"))
 
 ## Production and Capacity
-
 
 ### Production
 # Clean production data
