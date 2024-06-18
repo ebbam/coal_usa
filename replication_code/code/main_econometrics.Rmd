@@ -109,7 +109,6 @@ allcomp_cc_types <- merge(allcomp_cc, cc_cluster, by = "fips", all.x = TRUE)
 # Load required functions and dictionaries
 source("code/useful_functions.R")
 source("code/dicts.R")
-source("code/ref_lists.R")
 
 ```
 
@@ -1179,7 +1178,7 @@ kable(mergedecon, booktabs=TRUE) %>%
 ```
 
 
-## Coefficient Plot
+# Coefficient Plot
 
 ```{r}
 ###############################################################################
