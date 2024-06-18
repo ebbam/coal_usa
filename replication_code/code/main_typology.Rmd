@@ -61,6 +61,9 @@ library(flexclust)
 library(xtable)
 library(stargazer)
 library(usmap)
+library(sf)
+require(sf)
+library(viridis)
 library(ggplot2)
 library(viridis)
 library(fmsb)
@@ -260,9 +263,6 @@ cc_cluster <- cc_cluster[!duplicated(cc_cluster$fips),]
 # County Type Map
 ```{r}
 
-library(sf)
-require(sf)
-library(viridis)
 coalfields <- read_sf(dsn = "data/CoalFieldsUS", layer = "CoalFieldsUS")
 coalfields <- subset(coalfields, PROVINCE != "Alaska")
 counties <- read_sf(dsn = "data/CoalFieldsUS", layer = "cb_2018_us_county_20m")
