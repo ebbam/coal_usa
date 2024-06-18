@@ -23,3 +23,6 @@ Results_cache/html/__packages
 /QCEW
 data/production_coal/Mines.txt
 .DS_Store
+data/qcew_compiled_raw.RDS
+data/qcew_compiled_raw_2000_2022.RDS
+data/us-county-boundaries.csv
