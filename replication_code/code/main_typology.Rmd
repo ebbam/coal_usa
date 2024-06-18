@@ -21,12 +21,12 @@ knit: (function(inputFile, encoding) {
 
 # Overview
 
-The following script conducts the main typology analysis reported in the manuscript.
+The following script conducts the main typology/clustering analysis reported in the manuscript.
 
 The script produces the results reported in:
 - Main text
 - Figures 4-5
-- Data used to create Figure 6 in main_econometrics.Rmd
+- Data used to create Figure 6 in main_econometrics.Rmd (cc_clusters_251.xlsx)
 - Supplementary Tables S7, S23-S24
 - Supplementary Figures S2-4 
 
